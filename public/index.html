@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VAIDHYAR MANDHIRAM - Attendance</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Minimalist Brand Header -->
+  <nav class="navbar">
+    <div class="brand">
+      <span style="font-size: 1.5rem;">🏥</span>
+      <div>
+        <div class="brand-title">VAIDHYAR MANDHIRAM</div>
+        <div class="brand-sub">STAFF ATTENDANCE</div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container">
+
+    <!-- Notification Alert Banner -->
+    <div id="globalAlert" class="alert-banner"></div>
+
+    <!-- PUNCH ATTENDANCE CARD (FOCUSED EMPLOYEE SCREEN) -->
+    <section id="punchTab" class="tab-content">
+      <div class="card">
+        <!-- Greeting -->
+        <div class="greeting-header">
+          <div id="greetingTitle" class="greeting-title">Good Morning, Rahul</div>
+          <div class="greeting-sub">Welcome to your shift at Vaidhyar Mandhiram.</div>
+        </div>
+
+        <!-- Today's Shift Card -->
+        <div class="shift-card">
+          <div class="shift-label">TODAY'S ASSIGNED SHIFT</div>
+          <div id="assignedShiftName" class="shift-name">Morning Shift</div>
+          <div id="assignedShiftTime" class="shift-time">07:00 AM – 02:00 PM</div>
+        </div>
+
+        <!-- Main Punch Touch Action Box -->
+        <div class="punch-touch-box">
+          <div style="font-size: 0.8rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem;">Attendance Status</div>
+          <div id="attendanceStatusBadge" class="attendance-status-badge ready">
+            <span id="statusDot">●</span> <span id="statusText">Ready to Punch</span>
+          </div>
+
+          <div style="margin-top: 1rem;">
+            <!-- PUNCH BUTTON (Shown ONLY when inside hospital premises) -->
+            <button id="btnPunchMain" class="btn-punch-main in" onclick="initiateHighTrustPunch()">
+              <span id="btnIcon">👇</span> <span id="btnLabel">PUNCH IN</span>
+            </button>
+
+            <!-- Outside Hospital Notice (Shown ONLY when outside hospital premises) -->
+            <div id="outsideHospitalNotice" style="display: none; padding: 1.25rem; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 16px; color: #9f1239; margin-top: 0.5rem;">
+              <div style="font-size: 1.5rem; margin-bottom: 0.25rem;">📍</div>
+              <div style="font-size: 1rem; font-weight: 800; margin-bottom: 0.25rem;">Outside Hospital Premises</div>
+              <div id="outsideNoticeDetail" style="font-size: 0.85rem; color: #be123c;">
+                Attendance punching is available only when you are physically inside hospital grounds.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Today's Attendance Summary -->
+        <div class="summary-grid">
+          <div class="summary-item">
+            <label>Check In</label>
+            <span id="summaryCheckIn">--</span>
+          </div>
+          <div class="summary-item">
+            <label>Check Out</label>
+            <span id="summaryCheckOut">--</span>
+          </div>
+          <div class="summary-item">
+            <label>Worked</label>
+            <span id="summaryWorked">--</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- STEP-BY-STEP VERIFICATION PROGRESS OVERLAY -->
+  <div id="progressModal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 id="modalTitle" style="font-size: 1.2rem; font-weight: 800;">Verifying Attendance...</h3>
+      <p id="modalSub" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Performing cryptographic & hospital presence checks</p>
+
+      <div class="progress-steps-list">
+        <div id="stepIdentity" class="progress-step-item">
+          <span class="step-icon">⏳</span> <span>1. Cryptographic Identity Check</span>
+        </div>
+        <div id="stepNetwork" class="progress-step-item">
+          <span class="step-icon">⏳</span> <span>2. Hospital Wi-Fi Network Check</span>
+        </div>
+        <div id="stepLocation" class="progress-step-item">
+          <span class="step-icon">⏳</span> <span>3. Hospital Geofence & Accuracy Check</span>
+        </div>
+        <div id="stepShift" class="progress-step-item">
+          <span class="step-icon">⏳</span> <span>4. Shift Window Validation</span>
+        </div>
+        <div id="stepRecord" class="progress-step-item">
+          <span class="step-icon">⏳</span> <span>5. Server Timestamping & Audit Record</span>
+        </div>
+      </div>
+
+      <div id="modalFooter" style="display: none; margin-top: 1rem;">
+        <button class="btn-secondary" onclick="closeProgressModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
