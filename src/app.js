@@ -552,12 +552,13 @@ app.get('/api/webauthn/register-options', requireAuth, async (req, res) => {
     const employee = req.user;
     const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
 
+    const empIdStr = String(employee.id || 'emp_default');
     const options = await generateRegistrationOptions({
       rpName: 'VAIDHYAR MANDHIRAM Attendance',
       rpID,
-      userID: Buffer.from(employee.id || 'emp_default'),
-      userName: employee.email || employee.id,
-      userDisplayName: employee.name || 'Staff User',
+      userID: Uint8Array.from(Buffer.from(empIdStr)),
+      userName: String(employee.email || employee.id || 'staff@vaidhyar.org'),
+      userDisplayName: String(employee.name || 'Staff User'),
       attestationType: 'none',
       authenticatorSelection: {
         residentKey: 'preferred',
@@ -576,7 +577,7 @@ app.get('/api/webauthn/register-options', requireAuth, async (req, res) => {
 
     res.json({ success: true, challengeId, options });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message || 'Failed to generate WebAuthn registration options.' });
   }
 });
 
@@ -585,13 +586,13 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
     const { challengeId, credential } = req.body;
     const employee = req.user;
 
-    if (!challengeId || !credential) {
-      return res.status(400).json({ success: false, error: 'Registration payload incomplete.' });
+    if (!challengeId || !credential || !credential.id || !credential.response) {
+      return res.status(400).json({ success: false, error: 'Registration payload incomplete. Missing device passkey response.' });
     }
 
     const challengeRow = await queryGet('SELECT * FROM challenges WHERE id = ? AND employee_id = ? AND used = 0', [challengeId, employee.id]);
     if (!challengeRow || Number(challengeRow.expires_at) < Date.now()) {
-      return res.status(400).json({ success: false, error: 'Registration challenge session expired or invalid.' });
+      return res.status(400).json({ success: false, error: 'Registration challenge session expired. Please tap Register Passkey again.' });
     }
 
     const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
@@ -600,7 +601,7 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
     const verification = await verifyRegistrationResponse({
       response: credential,
       expectedChallenge: challengeRow.challenge,
-      expectedOrigin,
+      expectedOrigin: [expectedOrigin, 'http://localhost:3000', 'http://127.0.0.1:3000'],
       expectedRPID: rpID,
     });
 
@@ -608,9 +609,13 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
       const regInfo = verification.registrationInfo;
       const credentialObj = regInfo.credential || {};
 
-      const credId = toBase64Url(credentialObj.id || regInfo.credentialID);
+      const credId = toBase64Url(credentialObj.id || regInfo.credentialID || credential.id);
       const pubKey = toBase64Url(credentialObj.publicKey || regInfo.credentialPublicKey);
       const counter = credentialObj.counter !== undefined ? credentialObj.counter : (regInfo.counter || 0);
+
+      if (!credId || !pubKey) {
+        return res.status(400).json({ success: false, error: 'Could not extract valid credential ID or public key from passkey response.' });
+      }
 
       const id = 'cred_' + crypto.randomUUID();
       await queryRun(
@@ -623,10 +628,10 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
       await logAuditEvent(employee.id, employee.name, 'WEBAUTHN_REGISTERED', 'INFO', 'REGISTRATION_SUCCESS', 'WebAuthn Biometric Passkey registered successfully');
       res.json({ success: true, verified: true });
     } else {
-      res.status(400).json({ success: false, error: 'WebAuthn registration verification failed' });
+      res.status(400).json({ success: false, error: 'WebAuthn registration signature verification failed' });
     }
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message || 'Server passkey registration error' });
   }
 });
 
@@ -887,7 +892,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
         const authVerification = await verifyAuthenticationResponse({
           response: credential,
           expectedChallenge: challengeRow.challenge,
-          expectedOrigin,
+          expectedOrigin: [expectedOrigin, 'http://localhost:3000', 'http://127.0.0.1:3000'],
           expectedRPID: rpID,
           authenticator: {
             credentialID: toBufferFromBase64Url(storedCredential.credential_id),

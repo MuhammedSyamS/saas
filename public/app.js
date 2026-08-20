@@ -8,6 +8,27 @@ let state = {
   currentLocation: null // MUST be initialized as null (No default hospital GPS fallback!)
 };
 
+// Format WebAuthn & Device Errors into Clear, Human-Readable Explanations
+function formatWebAuthnErrorMessage(err) {
+  if (!err) return 'An unknown passkey error occurred.';
+  const msg = typeof err === 'string' ? err : (err.message || String(err));
+  const name = err.name || '';
+
+  if (name === 'NotAllowedError' || msg.includes('cancelled') || msg.includes('canceled') || msg.includes('User canceled')) {
+    return 'Device biometric authentication prompt was cancelled or timed out. Please try again.';
+  }
+  if (name === 'InvalidStateError' || msg.includes('already registered')) {
+    return 'This biometric passkey is already registered on your device.';
+  }
+  if (name === 'NotSupportedError' || msg.includes('not supported')) {
+    return 'Biometric WebAuthn passkeys require a secure connection (HTTPS or http://localhost).';
+  }
+  if (msg.includes('The first argument must be of type string') || msg.includes('Received undefined')) {
+    return 'Passkey Verification Error: Your browser did not send valid biometric credentials. Please ensure you tap "🔑 Register Passkey" to set up your device passkey first.';
+  }
+  return msg;
+}
+
 // Safe API Fetch Helper (Prevents HTML response JSON parse errors when static dev server is used)
 async function safeFetchJson(url, options = {}) {
   const res = await fetch(url, options);
@@ -256,7 +277,8 @@ async function registerWebAuthnPasskey() {
       throw new Error(verifyData.error || 'Passkey registration verification failed');
     }
   } catch (err) {
-    showAlert(`Passkey Error: ${err.message}`, 'error');
+    const formattedError = formatWebAuthnErrorMessage(err);
+    showAlert(`Passkey Error: ${formattedError}`, 'error');
   }
 }
 
@@ -330,13 +352,14 @@ async function initiateHighTrustPunch() {
     let credentialAssertion = null;
     try {
       if (challengeData.hasPasskey === false) {
-        throw new Error('No biometric passkey registered yet. Please click "🔑 Register Passkey" in the top bar to register your device Face ID / Fingerprint first.');
+        throw new Error('No biometric passkey registered yet. Please click "🔑 Register Passkey" in top bar to set up device Face ID / Fingerprint first.');
       }
       credentialAssertion = await SimpleWebAuthnBrowser.startAuthentication(challengeData.options);
     } catch (webauthnErr) {
+      const readableErr = formatWebAuthnErrorMessage(webauthnErr);
       updateProgressStep('stepIdentity', 'failed', 'Biometric Authentication Failed');
       showModalFooter();
-      throw new Error(`WebAuthn Authentication: ${webauthnErr.message}`);
+      throw new Error(`WebAuthn Authentication: ${readableErr}`);
     }
 
     updateProgressStep('stepIdentity', 'success', '✓ Biometric Passkey Assertion Verified');
