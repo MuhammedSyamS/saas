@@ -23,8 +23,8 @@ function formatWebAuthnErrorMessage(err) {
   if (name === 'NotSupportedError' || msg.includes('not supported')) {
     return 'Biometric WebAuthn passkeys require a secure connection (HTTPS or http://localhost).';
   }
-  if (msg.includes('The first argument must be of type string') || msg.includes('Received undefined')) {
-    return 'Passkey Verification Error: Your browser did not send valid biometric credentials. Please ensure you tap "🔑 Register Passkey" to set up your device passkey first.';
+  if (msg.includes('The first argument must be of type string') || msg.includes('Received undefined') || msg.includes('not send valid biometric credentials')) {
+    return 'Please register your device passkey (Face ID / Fingerprint / Device PIN) first by clicking "🔑 Register Passkey".';
   }
   return msg;
 }
@@ -238,8 +238,18 @@ function fillQuickLogin(email, password) {
 }
 
 // -------------------------------------------------------------
-// WEBAUTHN PASSKEY REGISTRATION
+// WEBAUTHN PASSKEY REGISTRATION & MODAL
 // -------------------------------------------------------------
+function openPasskeyPromptModal() {
+  const modal = document.getElementById('passkeyPromptModal');
+  if (modal) modal.classList.add('active');
+}
+
+function closePasskeyPromptModal() {
+  const modal = document.getElementById('passkeyPromptModal');
+  if (modal) modal.classList.remove('active');
+}
+
 async function registerWebAuthnPasskey() {
   if (!state.currentEmployee) return switchAuthTab('login');
 
@@ -254,10 +264,10 @@ async function registerWebAuthnPasskey() {
     showAlert('Please authenticate on your device (Face ID / Fingerprint / Device Lock)...', 'info');
 
     let credential = null;
-    if (window.SimpleWebAuthnBrowser) {
-      credential = await SimpleWebAuthnBrowser.startRegistration(optData.options);
+    if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
+      credential = await window.SimpleWebAuthnBrowser.startRegistration(optData.options);
     } else {
-      throw new Error('WebAuthn is not supported on this browser/device.');
+      throw new Error('WebAuthn biometric library not loaded or supported in this browser.');
     }
 
     const { data: verifyData } = await safeFetchJson('/api/webauthn/register-verify', {
@@ -271,8 +281,12 @@ async function registerWebAuthnPasskey() {
 
     if (verifyData.success) {
       state.hasPasskey = true;
-      document.getElementById('summaryPasskey').textContent = '✓ Passkey Registered';
-      showAlert('🎉 Biometric WebAuthn Passkey registered successfully!', 'success');
+      if (document.getElementById('summaryPasskey')) {
+        document.getElementById('summaryPasskey').textContent = '✓ Passkey Registered';
+      }
+      closePasskeyPromptModal();
+      showAlert('🎉 Biometric WebAuthn Passkey registered successfully! You can now Punch Attendance.', 'success');
+      await checkAuthSession();
     } else {
       throw new Error(verifyData.error || 'Passkey registration verification failed');
     }
@@ -318,6 +332,12 @@ async function initiateHighTrustPunch() {
     return showAlert('Attendance marking is restricted to hospital staff employees only.', 'error');
   }
 
+  // Check if Employee has a registered passkey first!
+  if (!state.hasPasskey) {
+    openPasskeyPromptModal();
+    return;
+  }
+
   const targetAction = emp.current_punch_status === 'CHECKED_IN' ? 'CHECK_OUT' : 'CHECK_IN';
 
   openProgressModal(targetAction);
@@ -342,6 +362,12 @@ async function initiateHighTrustPunch() {
       throw new Error(challengeData.error || 'Failed to acquire single-use challenge');
     }
 
+    if (challengeData.hasPasskey === false) {
+      closeProgressModal();
+      openPasskeyPromptModal();
+      return;
+    }
+
     // Trigger WebAuthn Biometric Prompt
     updateProgressStep('stepIdentity', 'active', 'Authenticating device biometric passkey...');
 
@@ -351,10 +377,7 @@ async function initiateHighTrustPunch() {
 
     let credentialAssertion = null;
     try {
-      if (challengeData.hasPasskey === false) {
-        throw new Error('No biometric passkey registered yet. Please click "🔑 Register Passkey" in top bar to set up device Face ID / Fingerprint first.');
-      }
-      credentialAssertion = await SimpleWebAuthnBrowser.startAuthentication(challengeData.options);
+      credentialAssertion = await window.SimpleWebAuthnBrowser.startAuthentication(challengeData.options);
     } catch (webauthnErr) {
       const readableErr = formatWebAuthnErrorMessage(webauthnErr);
       updateProgressStep('stepIdentity', 'failed', 'Biometric Authentication Failed');
