@@ -577,7 +577,8 @@ app.get('/api/webauthn/register-options', requireAuth, async (req, res) => {
 
     res.json({ success: true, challengeId, options });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message || 'Failed to generate WebAuthn registration options.' });
+    console.error('[WebAuthn Register Options Error]:', err);
+    res.status(400).json({ success: false, error: err.message || 'Failed to generate WebAuthn registration options.' });
   }
 });
 
@@ -596,12 +597,24 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
     }
 
     const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
-    const expectedOrigin = process.env.WEBAUTHN_ORIGIN || `${req.protocol}://${req.get('host')}`;
+    const clientOrigin = req.get('origin');
+    const hostOrigin = `${req.protocol}://${req.get('host')}`;
+    const allowedOrigins = Array.from(new Set([
+      clientOrigin,
+      hostOrigin,
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'https://saas-vmfg.vercel.app'
+    ])).filter(Boolean);
+
+    if (process.env.WEBAUTHN_ORIGIN) allowedOrigins.push(process.env.WEBAUTHN_ORIGIN);
 
     const verification = await verifyRegistrationResponse({
       response: credential,
       expectedChallenge: challengeRow.challenge,
-      expectedOrigin: [expectedOrigin, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+      expectedOrigin: allowedOrigins,
       expectedRPID: rpID,
     });
 
@@ -631,7 +644,8 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
       res.status(400).json({ success: false, error: 'WebAuthn registration signature verification failed' });
     }
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message || 'Server passkey registration error' });
+    console.error('[WebAuthn Register Verify Error]:', err);
+    res.status(400).json({ success: false, error: err.message || 'Server passkey registration error' });
   }
 });
 
@@ -887,12 +901,24 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
         credentialIdRef = storedCredential.credential_id;
       } else {
         const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
-        const expectedOrigin = process.env.WEBAUTHN_ORIGIN || `${req.protocol}://${req.get('host')}`;
+        const clientOrigin = req.get('origin');
+        const hostOrigin = `${req.protocol}://${req.get('host')}`;
+        const allowedOrigins = Array.from(new Set([
+          clientOrigin,
+          hostOrigin,
+          'http://localhost:3000',
+          'http://127.0.0.1:3000',
+          'http://localhost:5173',
+          'http://127.0.0.1:5173',
+          'https://saas-vmfg.vercel.app'
+        ])).filter(Boolean);
+
+        if (process.env.WEBAUTHN_ORIGIN) allowedOrigins.push(process.env.WEBAUTHN_ORIGIN);
 
         const authVerification = await verifyAuthenticationResponse({
           response: credential,
           expectedChallenge: challengeRow.challenge,
-          expectedOrigin: [expectedOrigin, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+          expectedOrigin: allowedOrigins,
           expectedRPID: rpID,
           authenticator: {
             credentialID: toBufferFromBase64Url(storedCredential.credential_id),
@@ -1230,10 +1256,11 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     if (err.message && err.message.startsWith('DATABASE_UNAVAILABLE')) {
       return res.status(500).json({ success: false, reasonCode: 'DATABASE_UNAVAILABLE', error: 'Database service unavailable.' });
     }
-    return res.status(500).json({
+    console.error('[Attendance Punch Error]:', err);
+    return res.status(400).json({
       success: false,
       reasonCode: 'INTERNAL_VALIDATION_FAILURE',
-      error: 'An internal server error occurred during attendance verification.'
+      error: err.message || 'An error occurred during attendance verification.'
     });
   }
 });
