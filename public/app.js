@@ -8,6 +8,24 @@ let state = {
   currentLocation: null // MUST be initialized as null (No default hospital GPS fallback!)
 };
 
+// Safe API Fetch Helper (Prevents HTML response JSON parse errors when static dev server is used)
+async function safeFetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const contentType = res.headers.get('content-type') || '';
+  const text = await res.text();
+
+  if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+    throw new Error('Backend server returned HTML instead of API JSON. Ensure the Node.js backend server is running ("npm start" or "node server.js" from project root).');
+  }
+
+  try {
+    const data = JSON.parse(text);
+    return { status: res.status, ok: res.ok, data };
+  } catch (err) {
+    throw new Error('Server response was not valid JSON.');
+  }
+}
+
 // Register Service Worker for PWA Shell
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -24,8 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Fetch Initial System Data & Network Egress IP
 async function fetchInitialData() {
   try {
-    const res = await fetch('/api/initial-data');
-    const data = await res.json();
+    const { data } = await safeFetchJson('/api/initial-data');
     if (data.success) {
       state.settings = data.settings;
       if (data.clientIp) {
@@ -35,15 +52,14 @@ async function fetchInitialData() {
       }
     }
   } catch (err) {
-    showAlert('Failed to connect to backend server: ' + err.message, 'error');
+    showAlert('Backend Connection Notice: ' + err.message, 'error');
   }
 }
 
 // Check Active Authentication Session
 async function checkAuthSession() {
   try {
-    const res = await fetch('/api/auth/me');
-    const data = await res.json();
+    const { data } = await safeFetchJson('/api/auth/me');
 
     if (data.success && data.employee) {
       state.currentEmployee = data.employee;
@@ -208,8 +224,7 @@ async function registerWebAuthnPasskey() {
 
   try {
     showAlert('Requesting passkey registration options from server...', 'info');
-    const optRes = await fetch('/api/webauthn/register-options');
-    const optData = await optRes.json();
+    const { data: optData } = await safeFetchJson('/api/webauthn/register-options');
 
     if (!optData.success) {
       throw new Error(optData.error || 'Failed to get registration options');
@@ -224,7 +239,7 @@ async function registerWebAuthnPasskey() {
       throw new Error('WebAuthn is not supported on this browser/device.');
     }
 
-    const verifyRes = await fetch('/api/webauthn/register-verify', {
+    const { data: verifyData } = await safeFetchJson('/api/webauthn/register-verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -232,8 +247,6 @@ async function registerWebAuthnPasskey() {
         credential
       })
     });
-
-    const verifyData = await verifyRes.json();
 
     if (verifyData.success) {
       state.hasPasskey = true;
@@ -294,17 +307,16 @@ async function initiateHighTrustPunch() {
     // STEP 1: Biometric Passkey & Security Challenge
     updateProgressStep('stepIdentity', 'active', 'Requesting WebAuthn passkey challenge...');
 
-    const challengeRes = await fetch('/api/attendance/challenge', {
+    const { status: chStatus, data: challengeData } = await safeFetchJson('/api/attendance/challenge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: targetAction })
     });
-    const challengeData = await challengeRes.json();
 
     if (!challengeData.success) {
       updateProgressStep('stepIdentity', 'failed', 'Challenge Failed');
       showModalFooter();
-      if (challengeRes.status === 401) updateUnauthenticatedUI();
+      if (chStatus === 401) updateUnauthenticatedUI();
       throw new Error(challengeData.error || 'Failed to acquire single-use challenge');
     }
 
@@ -359,7 +371,7 @@ async function initiateHighTrustPunch() {
     // STEP 5: Server Timestamping & Atomic Punch Record
     updateProgressStep('stepRecord', 'active', 'Submitting cryptographic assertion & recording timestamp...');
 
-    const punchRes = await fetch('/api/attendance/punch', {
+    const { data: punchData } = await safeFetchJson('/api/attendance/punch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -369,8 +381,6 @@ async function initiateHighTrustPunch() {
         credential: credentialAssertion
       })
     });
-
-    const punchData = await punchRes.json();
 
     if (punchData.success) {
       updateProgressStep('stepRecord', 'success', '✓ Server Timestamped & Audit Evidence Recorded');
@@ -489,13 +499,11 @@ async function handleStaffLoginForm(event) {
     const isEmail = identifier.includes('@');
     const body = isEmail ? { email: identifier, password } : { employeeId: identifier, password };
 
-    const res = await fetch('/api/auth/login', {
+    const { data } = await safeFetchJson('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-
-    const data = await res.json();
 
     if (data.success) {
       document.getElementById('loginPassword').value = '';
@@ -522,13 +530,11 @@ async function handleStaffRegisterForm(event) {
   }
 
   try {
-    const res = await fetch('/api/auth/register', {
+    const { data } = await safeFetchJson('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, employeeId, email, password, role })
     });
-
-    const data = await res.json();
 
     if (data.success) {
       document.getElementById('regPassword').value = '';
@@ -544,7 +550,7 @@ async function handleStaffRegisterForm(event) {
 
 async function performStaffLogout() {
   try {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await safeFetchJson('/api/auth/logout', { method: 'POST' });
     state.currentEmployee = null;
     updateUnauthenticatedUI();
     showAlert('Logged out successfully', 'info');
