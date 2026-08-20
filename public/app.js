@@ -329,13 +329,10 @@ async function initiateHighTrustPunch() {
 
     let credentialAssertion = null;
     try {
-      const getOptions = {
-        challenge: challengeData.challengeNonce,
-        rpId: window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname,
-        userVerification: 'preferred',
-        timeout: 60000
-      };
-      credentialAssertion = await SimpleWebAuthnBrowser.startAuthentication({ publicKey: getOptions });
+      if (challengeData.hasPasskey === false) {
+        throw new Error('No biometric passkey registered yet. Please click "🔑 Register Passkey" in the top bar to register your device Face ID / Fingerprint first.');
+      }
+      credentialAssertion = await SimpleWebAuthnBrowser.startAuthentication(challengeData.options);
     } catch (webauthnErr) {
       updateProgressStep('stepIdentity', 'failed', 'Biometric Authentication Failed');
       showModalFooter();

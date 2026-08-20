@@ -618,22 +618,40 @@ app.post('/api/attendance/challenge', requireAuth, requireEmployee, async (req, 
       return res.status(400).json({ success: false, error: 'Valid action (CHECK_IN or CHECK_OUT) required.' });
     }
 
+    const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
+    const userCredentials = await queryAll(
+      'SELECT credential_id, transports FROM webauthn_credentials WHERE employee_id = ? AND status = \'active\'',
+      [employee.id]
+    );
+
+    const allowCredentials = userCredentials.map(c => ({
+      id: c.credential_id,
+      type: 'public-key',
+      transports: c.transports ? JSON.parse(c.transports) : undefined
+    }));
+
+    const options = await generateAuthenticationOptions({
+      rpID,
+      allowCredentials,
+      userVerification: 'preferred'
+    });
+
     const challengeId = 'ch_' + crypto.randomUUID();
-    const challengeNonce = crypto.randomBytes(32).toString('hex');
     const expiresAt = Date.now() + 60000; // 60s validity
     const createdAt = new Date().toISOString();
 
     await queryRun(
       `INSERT INTO challenges (id, employee_id, action, challenge, created_at, expires_at, used)
        VALUES (?, ?, ?, ?, ?, ?, 0)`,
-      [challengeId, employee.id, action, challengeNonce, createdAt, expiresAt]
+      [challengeId, employee.id, action, options.challenge, createdAt, expiresAt]
     );
 
     res.json({
       success: true,
       challengeId,
-      challengeNonce,
-      expiresInSeconds: 60
+      challengeNonce: options.challenge,
+      options,
+      hasPasskey: userCredentials.length > 0
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
