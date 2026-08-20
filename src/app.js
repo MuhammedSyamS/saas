@@ -23,6 +23,25 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
+// Safe Base64Url & Buffer Conversion Helpers for WebAuthn v10/v13 SDK Compatibility
+function toBase64Url(input) {
+  if (!input) return '';
+  if (typeof input === 'string') return input;
+  if (Buffer.isBuffer(input)) return input.toString('base64url');
+  if (input instanceof Uint8Array || Array.isArray(input) || ArrayBuffer.isView(input)) {
+    return Buffer.from(input).toString('base64url');
+  }
+  return String(input);
+}
+
+function toBufferFromBase64Url(input) {
+  if (!input) return Buffer.alloc(0);
+  if (Buffer.isBuffer(input)) return input;
+  if (typeof input === 'string') return Buffer.from(input, 'base64url');
+  if (input instanceof Uint8Array || ArrayBuffer.isView(input)) return Buffer.from(input);
+  return Buffer.from(String(input), 'utf8');
+}
+
 // Trusted Client IP Extractor (Vercel Proxy Aware)
 function getTrustedClientIp(req) {
   const xForwardedFor = req.headers['x-forwarded-for'];
@@ -536,9 +555,9 @@ app.get('/api/webauthn/register-options', requireAuth, async (req, res) => {
     const options = await generateRegistrationOptions({
       rpName: 'VAIDHYAR MANDHIRAM Attendance',
       rpID,
-      userID: Buffer.from(employee.id),
-      userName: employee.email,
-      userDisplayName: employee.name,
+      userID: Buffer.from(employee.id || 'emp_default'),
+      userName: employee.email || employee.id,
+      userDisplayName: employee.name || 'Staff User',
       attestationType: 'none',
       authenticatorSelection: {
         residentKey: 'preferred',
@@ -586,12 +605,18 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
     });
 
     if (verification.verified && verification.registrationInfo) {
-      const { credentialID, credentialPublicKey, counter } = verification.registrationInfo;
+      const regInfo = verification.registrationInfo;
+      const credentialObj = regInfo.credential || {};
+
+      const credId = toBase64Url(credentialObj.id || regInfo.credentialID);
+      const pubKey = toBase64Url(credentialObj.publicKey || regInfo.credentialPublicKey);
+      const counter = credentialObj.counter !== undefined ? credentialObj.counter : (regInfo.counter || 0);
+
       const id = 'cred_' + crypto.randomUUID();
       await queryRun(
         `INSERT INTO webauthn_credentials (id, employee_id, credential_id, public_key, counter, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [id, employee.id, Buffer.from(credentialID).toString('base64url'), Buffer.from(credentialPublicKey).toString('base64url'), counter, new Date().toISOString()]
+        [id, employee.id, credId, pubKey, counter, new Date().toISOString()]
       );
 
       await queryRun('UPDATE challenges SET used = 1 WHERE id = ?', [challengeId]);
@@ -865,8 +890,8 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
           expectedOrigin,
           expectedRPID: rpID,
           authenticator: {
-            credentialID: Buffer.from(storedCredential.credential_id, 'base64url'),
-            credentialPublicKey: Buffer.from(storedCredential.public_key, 'base64url'),
+            credentialID: toBufferFromBase64Url(storedCredential.credential_id),
+            credentialPublicKey: toBufferFromBase64Url(storedCredential.public_key),
             counter: Number(storedCredential.counter)
           }
         });
@@ -887,7 +912,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
           });
         }
 
-        const newCounter = authVerification.authenticationInfo.newCounter;
+        const newCounter = authVerification.authenticationInfo ? authVerification.authenticationInfo.newCounter : Number(storedCredential.counter) + 1;
         await queryRun('UPDATE webauthn_credentials SET counter = ?, last_used_at = ? WHERE id = ?', [newCounter, serverTimestamp, storedCredential.id]);
         webauthnVerified = true;
         credentialIdRef = storedCredential.credential_id;
