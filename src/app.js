@@ -420,7 +420,7 @@ app.post('/api/auth/logout', requireAuth, async (req, res) => {
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const shifts = await queryAll('SELECT * FROM shifts WHERE employee_id = ?', [req.user.id]);
-    const credentials = await queryAll('SELECT id, credential_id, created_at, last_used_at, status FROM webauthn_credentials WHERE employee_id = ?', [req.user.id]);
+    const credentials = await queryAll('SELECT id, credential_id, created_at, last_used_at, status FROM webauthn_credentials WHERE employee_id = ? AND (status = \'active\' OR status IS NULL OR status = \'\')', [req.user.id]);
     
     // Fetch active shift instance for current punch status
     const shiftInstanceResult = await getOrCreateShiftInstance(req.user.id);
@@ -556,7 +556,7 @@ app.get('/api/webauthn/register-options', requireAuth, async (req, res) => {
     const options = await generateRegistrationOptions({
       rpName: 'VAIDHYAR MANDHIRAM Attendance',
       rpID,
-      userID: Uint8Array.from(Buffer.from(empIdStr)),
+      userID: new TextEncoder().encode(empIdStr),
       userName: String(employee.email || employee.id || 'staff@vaidhyar.org'),
       userDisplayName: String(employee.name || 'Staff User'),
       attestationType: 'none',
@@ -619,8 +619,8 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
 
       const id = 'cred_' + crypto.randomUUID();
       await queryRun(
-        `INSERT INTO webauthn_credentials (id, employee_id, credential_id, public_key, counter, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO webauthn_credentials (id, employee_id, credential_id, public_key, counter, status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?)`,
         [id, employee.id, credId, pubKey, counter, new Date().toISOString()]
       );
 
@@ -650,7 +650,7 @@ app.post('/api/attendance/challenge', requireAuth, requireEmployee, async (req, 
 
     const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
     const userCredentials = await queryAll(
-      'SELECT credential_id, transports FROM webauthn_credentials WHERE employee_id = ? AND status = \'active\'',
+      `SELECT credential_id, transports FROM webauthn_credentials WHERE employee_id = ? AND (status = 'active' OR status IS NULL OR status = '')`,
       [employee.id]
     );
 
