@@ -45,8 +45,97 @@
     <!-- Global Notification Alert Banner -->
     <div id="globalAlert" class="alert-banner"></div>
 
-    <!-- PUNCH ATTENDANCE CARD (FOCUSED EMPLOYEE SCREEN) -->
-    <section id="punchTab" class="tab-content">
+    <!-- UNAUTHENTICATED INLINE LOGIN & SIGNUP CARD -->
+    <section id="authCardSection" class="tab-content" style="display: block;">
+      <div class="card" style="max-width: 520px; margin: 0 auto; text-align: left;">
+        <div style="text-align: center; margin-bottom: 1.5rem;">
+          <div style="font-size: 2.5rem; margin-bottom: 0.25rem;">🏥</div>
+          <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary);">VAIDHYAR MANDHIRAM</h2>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">High-Trust Hospital Staff Attendance Authentication</p>
+        </div>
+
+        <!-- Auth Tabs Header -->
+        <div style="display: flex; background: #f1f5f9; padding: 0.3rem; border-radius: 12px; margin-bottom: 1.25rem;">
+          <button id="tabBtnLogin" onclick="switchAuthTab('login')" style="flex: 1; padding: 0.6rem; border: none; border-radius: 9px; font-weight: 700; font-size: 0.9rem; cursor: pointer; background: #ffffff; color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            🔐 Login
+          </button>
+          <button id="tabBtnRegister" onclick="switchAuthTab('register')" style="flex: 1; padding: 0.6rem; border: none; border-radius: 9px; font-weight: 700; font-size: 0.9rem; cursor: pointer; background: transparent; color: #64748b;">
+            📝 Register Staff
+          </button>
+        </div>
+
+        <!-- LOGIN FORM -->
+        <form id="inlineLoginForm" onsubmit="handleStaffLoginForm(event)">
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Employee ID or Email</label>
+            <input type="text" id="loginIdentifier" class="select-input" placeholder="e.g. rahul.sharma@vaidhyar.org" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
+          </div>
+
+          <div style="margin-bottom: 1.25rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Password</label>
+            <input type="password" id="loginPassword" class="select-input" placeholder="Enter password" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
+          </div>
+
+          <button type="submit" class="btn-punch-main in" style="width: 100%; height: 48px; font-size: 1rem; border-radius: 12px; margin-bottom: 1.25rem;">
+            Login Now
+          </button>
+
+          <!-- Quick Account Fill Options -->
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0.85rem;">
+            <div style="font-size: 0.75rem; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 0.5rem; text-align: center;">⚡ Quick Login Accounts</div>
+            <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+              <button type="button" onclick="fillQuickLogin('rahul.sharma@vaidhyar.org', 'Password123!')" style="padding: 0.45rem; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; text-align: left;">
+                👤 <strong>Rahul Sharma</strong> (Staff) &bull; Password123!
+              </button>
+              <button type="button" onclick="fillQuickLogin('ananya.iyer@vaidhyar.org', 'Password123!')" style="padding: 0.45rem; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; text-align: left;">
+                👩‍⚕️ <strong>Dr. Ananya Iyer</strong> (Staff) &bull; Password123!
+              </button>
+              <button type="button" onclick="fillQuickLogin('admin@vaidhyar.org', 'AdminPassword123!')" style="padding: 0.45rem; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; text-align: left;">
+                👨‍💼 <strong>Dr. Marcus Vance</strong> (Admin) &bull; AdminPassword123!
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <!-- REGISTER / SIGNUP FORM -->
+        <form id="inlineRegisterForm" onsubmit="handleStaffRegisterForm(event)" style="display: none;">
+          <div style="margin-bottom: 0.85rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Full Name</label>
+            <input type="text" id="regName" class="select-input" placeholder="e.g. Dr. Vikram Dev" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+          </div>
+
+          <div style="margin-bottom: 0.85rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Employee ID</label>
+            <input type="text" id="regEmpId" class="select-input" placeholder="e.g. emp_3" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+          </div>
+
+          <div style="margin-bottom: 0.85rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Email Address</label>
+            <input type="email" id="regEmail" class="select-input" placeholder="vikram.dev@vaidhyar.org" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+          </div>
+
+          <div style="margin-bottom: 0.85rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Password</label>
+            <input type="password" id="regPassword" class="select-input" placeholder="Create password" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+          </div>
+
+          <div style="margin-bottom: 1.1rem;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Role</label>
+            <select id="regRole" class="select-input" style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+              <option value="employee">Hospital Staff Employee</option>
+              <option value="admin">Department Admin</option>
+            </select>
+          </div>
+
+          <button type="submit" class="btn-punch-main in" style="width: 100%; height: 48px; font-size: 1rem; border-radius: 12px;">
+            Create Account & Login
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- AUTHENTICATED PUNCH ATTENDANCE CARD -->
+    <section id="punchTab" class="tab-content" style="display: none;">
       <div class="card">
         <!-- Greeting -->
         <div class="greeting-header">
@@ -73,15 +162,6 @@
             <button id="btnPunchMain" class="btn-punch-main in" style="display: none;" onclick="initiateHighTrustPunch()">
               <span id="btnIcon">👇</span> <span id="btnLabel">PUNCH IN</span>
             </button>
-
-            <!-- Login Prompt Notice (When unauthenticated) -->
-            <div id="loginPromptNotice" style="padding: 1.25rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; color: #475569; margin-top: 0.5rem;">
-              <div style="font-size: 1.5rem; margin-bottom: 0.25rem;">🔐</div>
-              <div style="font-size: 1rem; font-weight: 800; margin-bottom: 0.25rem;">Staff Authentication Required</div>
-              <div style="font-size: 0.85rem; color: #64748b;">
-                Please log in with your employee credentials to perform high-trust attendance punching.
-              </div>
-            </div>
 
             <!-- Outside Hospital Notice -->
             <div id="outsideHospitalNotice" style="display: none; padding: 1.25rem; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 16px; color: #9f1239; margin-top: 0.5rem;">
@@ -141,38 +221,6 @@
       <div id="modalFooter" style="display: none; margin-top: 1rem;">
         <button class="btn-secondary" onclick="closeProgressModal()">Close</button>
       </div>
-    </div>
-  </div>
-
-  <!-- SECURE STAFF LOGIN MODAL OVERLAY -->
-  <div id="loginModal" class="modal-overlay">
-    <div class="modal-box" style="text-align: left;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div>
-          <h3 style="font-size: 1.25rem; font-weight: 800; color: var(--text-primary);">🔐 Staff Account Login</h3>
-          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">Enter your employee ID/email and password</p>
-        </div>
-        <button onclick="closeLoginModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</button>
-      </div>
-
-      <form onsubmit="handleStaffLoginForm(event)">
-        <div style="margin-bottom: 1rem;">
-          <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Employee ID or Email</label>
-          <input type="text" id="loginIdentifier" class="select-input" placeholder="e.g. rahul.sharma@vaidhyar.org" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
-        </div>
-
-        <div style="margin-bottom: 1.25rem;">
-          <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Password</label>
-          <input type="password" id="loginPassword" class="select-input" placeholder="Enter secure password" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
-        </div>
-
-        <div style="display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.5rem;">
-          <button type="button" class="btn-secondary" onclick="closeLoginModal()">Cancel</button>
-          <button type="submit" class="btn-punch-main in" style="max-width: 160px; height: 44px; font-size: 0.95rem; border-radius: 12px;">
-            Login Now
-          </button>
-        </div>
-      </form>
     </div>
   </div>
 

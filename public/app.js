@@ -65,6 +65,12 @@ async function checkAuthSession() {
 function updateAuthenticatedUI() {
   const emp = state.currentEmployee;
 
+  // Toggle Card Views
+  const authSection = document.getElementById('authCardSection');
+  const punchSection = document.getElementById('punchTab');
+  if (authSection) authSection.style.display = 'none';
+  if (punchSection) punchSection.style.display = 'block';
+
   // Navbar
   document.getElementById('userInfoPill').style.display = 'flex';
   document.getElementById('currentUserName').textContent = `${emp.name}`;
@@ -101,9 +107,6 @@ function updateAuthenticatedUI() {
   const btn = document.getElementById('btnPunchMain');
   const btnIcon = document.getElementById('btnIcon');
   const btnLabel = document.getElementById('btnLabel');
-  const loginPrompt = document.getElementById('loginPromptNotice');
-
-  loginPrompt.style.display = 'none';
 
   if (emp.role !== 'employee') {
     btn.style.display = 'none';
@@ -147,27 +150,61 @@ function updateAuthenticatedUI() {
 }
 
 function updateUnauthenticatedUI() {
+  const authSection = document.getElementById('authCardSection');
+  const punchSection = document.getElementById('punchTab');
+  if (authSection) authSection.style.display = 'block';
+  if (punchSection) punchSection.style.display = 'none';
+
   document.getElementById('userInfoPill').style.display = 'none';
   document.getElementById('btnRegisterPasskey').style.display = 'none';
   document.getElementById('btnLoginLogout').textContent = '🔑 Login';
+}
 
-  document.getElementById('greetingTitle').textContent = 'Welcome to Vaidhyar Mandhiram';
-  document.getElementById('greetingSub').textContent = 'Log in to mark your high-trust hospital attendance.';
+// -------------------------------------------------------------
+// AUTH TAB SWITCHING & QUICK LOGIN
+// -------------------------------------------------------------
+function switchAuthTab(tab) {
+  const loginForm = document.getElementById('inlineLoginForm');
+  const registerForm = document.getElementById('inlineRegisterForm');
+  const btnLogin = document.getElementById('tabBtnLogin');
+  const btnRegister = document.getElementById('tabBtnRegister');
 
-  document.getElementById('btnPunchMain').style.display = 'none';
-  document.getElementById('loginPromptNotice').style.display = 'block';
+  if (tab === 'login') {
+    loginForm.style.display = 'block';
+    registerForm.style.display = 'none';
 
-  const badge = document.getElementById('attendanceStatusBadge');
-  badge.className = 'attendance-status-badge ready';
-  document.getElementById('statusDot').textContent = '●';
-  document.getElementById('statusText').textContent = 'Authentication Required';
+    btnLogin.style.background = '#ffffff';
+    btnLogin.style.color = '#1e293b';
+    btnLogin.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+
+    btnRegister.style.background = 'transparent';
+    btnRegister.style.color = '#64748b';
+    btnRegister.style.boxShadow = 'none';
+  } else {
+    loginForm.style.display = 'none';
+    registerForm.style.display = 'block';
+
+    btnRegister.style.background = '#ffffff';
+    btnRegister.style.color = '#1e293b';
+    btnRegister.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+
+    btnLogin.style.background = 'transparent';
+    btnLogin.style.color = '#64748b';
+    btnLogin.style.boxShadow = 'none';
+  }
+}
+
+function fillQuickLogin(email, password) {
+  document.getElementById('loginIdentifier').value = email;
+  document.getElementById('loginPassword').value = password;
+  switchAuthTab('login');
 }
 
 // -------------------------------------------------------------
 // WEBAUTHN PASSKEY REGISTRATION
 // -------------------------------------------------------------
 async function registerWebAuthnPasskey() {
-  if (!state.currentEmployee) return openLoginModal();
+  if (!state.currentEmployee) return switchAuthTab('login');
 
   try {
     showAlert('Requesting passkey registration options from server...', 'info');
@@ -180,7 +217,6 @@ async function registerWebAuthnPasskey() {
 
     showAlert('Please authenticate on your device (Face ID / Fingerprint / Device Lock)...', 'info');
 
-    // Trigger Browser WebAuthn API via SimpleWebAuthn
     let credential = null;
     if (window.SimpleWebAuthnBrowser) {
       credential = await SimpleWebAuthnBrowser.startRegistration(optData.options);
@@ -240,7 +276,7 @@ function requestFreshLocation() {
 // HIGH-TRUST ATTENDANCE PUNCH PIPELINE
 // -------------------------------------------------------------
 async function initiateHighTrustPunch() {
-  if (!state.currentEmployee) return openLoginModal();
+  if (!state.currentEmployee) return switchAuthTab('login');
 
   const emp = state.currentEmployee;
   if (emp.role !== 'employee') {
@@ -268,7 +304,7 @@ async function initiateHighTrustPunch() {
     if (!challengeData.success) {
       updateProgressStep('stepIdentity', 'failed', 'Challenge Failed');
       showModalFooter();
-      if (challengeRes.status === 401) openLoginModal();
+      if (challengeRes.status === 401) updateUnauthenticatedUI();
       throw new Error(challengeData.error || 'Failed to acquire single-use challenge');
     }
 
@@ -430,24 +466,14 @@ function showAlert(msg, type = 'success') {
 }
 
 // -------------------------------------------------------------
-// AUTH MODAL & HANDLERS
+// AUTH FORM HANDLERS
 // -------------------------------------------------------------
 function handleAuthAction() {
   if (state.currentEmployee) {
     performStaffLogout();
   } else {
-    openLoginModal();
+    switchAuthTab('login');
   }
-}
-
-function openLoginModal() {
-  const modal = document.getElementById('loginModal');
-  if (modal) modal.classList.add('active');
-}
-
-function closeLoginModal() {
-  const modal = document.getElementById('loginModal');
-  if (modal) modal.classList.remove('active');
 }
 
 async function handleStaffLoginForm(event) {
@@ -472,7 +498,6 @@ async function handleStaffLoginForm(event) {
     const data = await res.json();
 
     if (data.success) {
-      closeLoginModal();
       document.getElementById('loginPassword').value = '';
       showAlert(`✓ Logged in successfully as ${data.employee.name}`, 'success');
       await checkAuthSession();
@@ -481,6 +506,39 @@ async function handleStaffLoginForm(event) {
     }
   } catch (err) {
     showAlert(`Login error: ${err.message}`, 'error');
+  }
+}
+
+async function handleStaffRegisterForm(event) {
+  event.preventDefault();
+  const name = document.getElementById('regName').value.trim();
+  const employeeId = document.getElementById('regEmpId').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const role = document.getElementById('regRole').value;
+
+  if (!name || !employeeId || !email || !password) {
+    return showAlert('All fields are required for staff account registration', 'error');
+  }
+
+  try {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, employeeId, email, password, role })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      document.getElementById('regPassword').value = '';
+      showAlert(`🎉 Account created! Logged in as ${data.employee.name}`, 'success');
+      await checkAuthSession();
+    } else {
+      showAlert(`Registration failed: ${data.error || 'Could not create account'}`, 'error');
+    }
+  } catch (err) {
+    showAlert(`Registration error: ${err.message}`, 'error');
   }
 }
 

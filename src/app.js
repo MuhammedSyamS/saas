@@ -249,8 +249,76 @@ function requireAdmin(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// AUTH ENDPOINTS
+// AUTH ENDPOINTS (LOGIN & SIGNUP/REGISTER)
 // -------------------------------------------------------------
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, employeeId, password, role } = req.body;
+
+    if (!name || !email || !employeeId || !password) {
+      return res.status(400).json({ success: false, reasonCode: 'AUTHENTICATION_FAILED', error: 'All fields (Name, Email, Employee ID, Password) are required.' });
+    }
+
+    const existingEmp = await queryGet('SELECT * FROM employees WHERE id = ? OR email = ?', [employeeId, email]);
+    if (existingEmp) {
+      return res.status(400).json({ success: false, reasonCode: 'EMPLOYEE_EXISTS', error: 'An employee account with this ID or Email already exists.' });
+    }
+
+    const password_hash = hashPassword(password);
+    const userRole = role === 'admin' ? 'admin' : 'employee';
+
+    await queryRun(
+      `INSERT INTO employees (id, name, email, password_hash, role, status, needs_review)
+       VALUES (?, ?, ?, ?, ?, 'active', 0)`,
+      [employeeId, name, email, password_hash, userRole]
+    );
+
+    // Create default shift for new employee
+    const shiftId = 'shift_' + crypto.randomUUID();
+    await queryRun(
+      `INSERT INTO shifts (id, employee_id, shift_name, start_time, end_time, is_night_shift, allowed_early_in_mins, allowed_late_in_mins, allowed_early_out_mins, allowed_late_out_mins, active_days)
+       VALUES (?, ?, 'Day Duty Shift', '08:00', '16:00', 0, 720, 1440, 720, 1440, 'Mon,Tue,Wed,Thu,Fri,Sat,Sun')`,
+      [shiftId, employeeId]
+    );
+
+    const sessionId = 'sess_' + crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const createdAt = new Date().toISOString();
+
+    await queryRun(
+      `INSERT INTO sessions (id, employee_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+      [sessionId, employeeId, expiresAt, createdAt]
+    );
+
+    res.cookie('vaidhyar_session', sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
+    await logAuditEvent(employeeId, name, 'REGISTER_SUCCESS', 'INFO', 'ACCOUNT_CREATED', 'New staff employee account registered');
+
+    res.json({
+      success: true,
+      sessionId,
+      message: 'Account registered and logged in successfully!',
+      employee: {
+        id: employeeId,
+        name,
+        email,
+        role: userRole,
+        status: 'active'
+      }
+    });
+  } catch (err) {
+    if (err.message && err.message.startsWith('DATABASE_UNAVAILABLE')) {
+      return res.status(500).json({ success: false, reasonCode: 'DATABASE_UNAVAILABLE', error: 'Database service unavailable.' });
+    }
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 app.post('/api/auth/login', async (req, res) => {
   try {
