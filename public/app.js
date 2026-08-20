@@ -8,6 +8,129 @@ let state = {
   currentLocation: null // MUST be initialized as null (No default hospital GPS fallback!)
 };
 
+// Base64Url <-> ArrayBuffer Utilities for Dual-Engine WebAuthn
+function bufferToBase64Url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let string = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    string += String.fromCharCode(bytes[i]);
+  }
+  return btoa(string).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function base64UrlToBuffer(base64url) {
+  if (!base64url) return new Uint8Array(0).buffer;
+  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  const padLen = (4 - (base64.length % 4)) % 4;
+  const padded = base64 + '='.repeat(padLen);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+// Dual-Engine WebAuthn Registration (SimpleWebAuthn + Native Fallback)
+async function webAuthnRegister(optionsJSON) {
+  // 1. Try SimpleWebAuthnBrowser v10+ and v9
+  if (window.SimpleWebAuthnBrowser) {
+    try {
+      if (typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
+        return await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
+      }
+    } catch (e1) {
+      try {
+        return await window.SimpleWebAuthnBrowser.startRegistration(optionsJSON);
+      } catch (e2) {
+        console.warn('[WebAuthn] SimpleWebAuthnBrowser registration failed, switching to native WebAuthn:', e2);
+      }
+    }
+  }
+
+  // 2. Native W3C WebAuthn API Fallback (navigator.credentials.create)
+  if (!navigator.credentials || !navigator.credentials.create) {
+    throw new Error('Biometric passkeys are not supported on this device/browser.');
+  }
+
+  const publicKey = {
+    ...optionsJSON,
+    challenge: base64UrlToBuffer(optionsJSON.challenge),
+    user: {
+      ...optionsJSON.user,
+      id: base64UrlToBuffer(optionsJSON.user.id)
+    },
+    excludeCredentials: (optionsJSON.excludeCredentials || []).map(c => ({
+      ...c,
+      id: base64UrlToBuffer(c.id)
+    }))
+  };
+
+  const cred = await navigator.credentials.create({ publicKey });
+  if (!cred) throw new Error('Biometric passkey creation cancelled or returned no credential.');
+
+  return {
+    id: cred.id,
+    rawId: bufferToBase64Url(cred.rawId),
+    response: {
+      clientDataJSON: bufferToBase64Url(cred.response.clientDataJSON),
+      attestationObject: bufferToBase64Url(cred.response.attestationObject),
+      transports: cred.response.getTransports ? cred.response.getTransports() : ['internal']
+    },
+    type: cred.type,
+    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+    authenticatorAttachment: cred.authenticatorAttachment || 'platform'
+  };
+}
+
+// Dual-Engine WebAuthn Authentication (SimpleWebAuthn + Native Fallback)
+async function webAuthnAuthenticate(optionsJSON) {
+  // 1. Try SimpleWebAuthnBrowser v10+ and v9
+  if (window.SimpleWebAuthnBrowser) {
+    try {
+      if (typeof window.SimpleWebAuthnBrowser.startAuthentication === 'function') {
+        return await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON });
+      }
+    } catch (e1) {
+      try {
+        return await window.SimpleWebAuthnBrowser.startAuthentication(optionsJSON);
+      } catch (e2) {
+        console.warn('[WebAuthn] SimpleWebAuthnBrowser authentication failed, switching to native WebAuthn:', e2);
+      }
+    }
+  }
+
+  // 2. Native W3C WebAuthn API Fallback (navigator.credentials.get)
+  if (!navigator.credentials || !navigator.credentials.get) {
+    throw new Error('Biometric passkeys are not supported on this device/browser.');
+  }
+
+  const publicKey = {
+    ...optionsJSON,
+    challenge: base64UrlToBuffer(optionsJSON.challenge),
+    allowCredentials: (optionsJSON.allowCredentials || []).map(c => ({
+      ...c,
+      id: base64UrlToBuffer(c.id)
+    }))
+  };
+
+  const cred = await navigator.credentials.get({ publicKey });
+  if (!cred) throw new Error('Biometric passkey authentication cancelled or returned no assertion.');
+
+  return {
+    id: cred.id,
+    rawId: bufferToBase64Url(cred.rawId),
+    response: {
+      clientDataJSON: bufferToBase64Url(cred.response.clientDataJSON),
+      authenticatorData: bufferToBase64Url(cred.response.authenticatorData),
+      signature: bufferToBase64Url(cred.response.signature),
+      userHandle: cred.response.userHandle ? bufferToBase64Url(cred.response.userHandle) : undefined
+    },
+    type: cred.type,
+    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {}
+  };
+}
+
 // Format WebAuthn & Device Errors into Clear, Human-Readable Explanations
 function formatWebAuthnErrorMessage(err) {
   if (!err) return 'An unknown passkey error occurred.';
@@ -263,13 +386,8 @@ async function registerWebAuthnPasskey() {
 
     showAlert('Please authenticate on your device (Face ID / Fingerprint / Device Lock)...', 'info');
 
-    let credential = null;
-    if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
-      // Standard SimpleWebAuthn v10+ call structure
-      credential = await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON: optData.options });
-    } else {
-      throw new Error('WebAuthn biometric library not loaded or supported in this browser.');
-    }
+    // Call Dual-Engine Registration Helper (SimpleWebAuthn + Native Fallback)
+    const credential = await webAuthnRegister(optData.options);
 
     const { data: verifyData } = await safeFetchJson('/api/webauthn/register-verify', {
       method: 'POST',
@@ -372,14 +490,10 @@ async function initiateHighTrustPunch() {
     // Trigger WebAuthn Biometric Prompt
     updateProgressStep('stepIdentity', 'active', 'Authenticating device biometric passkey...');
 
-    if (!window.SimpleWebAuthnBrowser) {
-      throw new Error('WebAuthn is not supported on this device/browser.');
-    }
-
     let credentialAssertion = null;
     try {
-      // Standard SimpleWebAuthn v10+ call structure
-      credentialAssertion = await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: challengeData.options });
+      // Call Dual-Engine Authentication Helper (SimpleWebAuthn + Native Fallback)
+      credentialAssertion = await webAuthnAuthenticate(challengeData.options);
     } catch (webauthnErr) {
       const readableErr = formatWebAuthnErrorMessage(webauthnErr);
       updateProgressStep('stepIdentity', 'failed', 'Biometric Authentication Failed');
