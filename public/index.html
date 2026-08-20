@@ -68,12 +68,12 @@
         <form id="inlineLoginForm" onsubmit="handleStaffLoginForm(event)">
           <div style="margin-bottom: 1rem;">
             <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Employee ID or Email</label>
-            <input type="text" id="loginIdentifier" class="select-input" placeholder="e.g. rahul.sharma@vaidhyar.org" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
+            <input type="text" id="loginIdentifier" class="select-input" autocomplete="username" placeholder="e.g. rahul.sharma@vaidhyar.org" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
           </div>
 
           <div style="margin-bottom: 1.25rem;">
             <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Password</label>
-            <input type="password" id="loginPassword" class="select-input" placeholder="Enter password" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
+            <input type="password" id="loginPassword" class="select-input" autocomplete="current-password" placeholder="Enter password" required style="width: 100%; font-size: 0.95rem; padding: 0.75rem; border-radius: 12px;">
           </div>
 
           <button type="submit" class="btn-punch-main in" style="width: 100%; height: 48px; font-size: 1rem; border-radius: 12px; margin-bottom: 1.25rem;">
@@ -101,22 +101,22 @@
         <form id="inlineRegisterForm" onsubmit="handleStaffRegisterForm(event)" style="display: none;">
           <div style="margin-bottom: 0.85rem;">
             <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Full Name</label>
-            <input type="text" id="regName" class="select-input" placeholder="e.g. Dr. Vikram Dev" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+            <input type="text" id="regName" class="select-input" autocomplete="name" placeholder="e.g. Dr. Vikram Dev" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
           </div>
 
           <div style="margin-bottom: 0.85rem;">
             <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Employee ID</label>
-            <input type="text" id="regEmpId" class="select-input" placeholder="e.g. emp_3" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+            <input type="text" id="regEmpId" class="select-input" autocomplete="username" placeholder="e.g. emp_3" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
           </div>
 
           <div style="margin-bottom: 0.85rem;">
             <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Email Address</label>
-            <input type="email" id="regEmail" class="select-input" placeholder="vikram.dev@vaidhyar.org" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+            <input type="email" id="regEmail" class="select-input" autocomplete="email" placeholder="vikram.dev@vaidhyar.org" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
           </div>
 
           <div style="margin-bottom: 0.85rem;">
             <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem;">Password</label>
-            <input type="password" id="regPassword" class="select-input" placeholder="Create password" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
+            <input type="password" id="regPassword" class="select-input" autocomplete="new-password" placeholder="Create password" required style="width: 100%; font-size: 0.9rem; padding: 0.65rem; border-radius: 10px;">
           </div>
 
           <div style="margin-bottom: 1.1rem;">

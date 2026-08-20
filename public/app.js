@@ -265,7 +265,8 @@ async function registerWebAuthnPasskey() {
 
     let credential = null;
     if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
-      credential = await window.SimpleWebAuthnBrowser.startRegistration(optData.options);
+      // Standard SimpleWebAuthn v10+ call structure
+      credential = await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON: optData.options });
     } else {
       throw new Error('WebAuthn biometric library not loaded or supported in this browser.');
     }
@@ -377,7 +378,8 @@ async function initiateHighTrustPunch() {
 
     let credentialAssertion = null;
     try {
-      credentialAssertion = await window.SimpleWebAuthnBrowser.startAuthentication(challengeData.options);
+      // Standard SimpleWebAuthn v10+ call structure
+      credentialAssertion = await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: challengeData.options });
     } catch (webauthnErr) {
       const readableErr = formatWebAuthnErrorMessage(webauthnErr);
       updateProgressStep('stepIdentity', 'failed', 'Biometric Authentication Failed');
