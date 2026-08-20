@@ -1,11 +1,34 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
+
+// Password Hashing & Verification Utilities
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return `pbkdf2:sha512:100000:${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  if (!password || !storedHash) return false;
+  try {
+    const parts = storedHash.split(':');
+    if (parts.length !== 5 || parts[0] !== 'pbkdf2' || parts[1] !== 'sha512') return false;
+    const iterations = parseInt(parts[2], 10);
+    const salt = parts[3];
+    const originalHash = parts[4];
+    const verifyHash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(originalHash, 'hex'), Buffer.from(verifyHash, 'hex'));
+  } catch (e) {
+    return false;
+  }
+}
 
 // Mongoose Schemas & Models
 const EmployeeSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
-  password_hash: String,
+  password_hash: { type: String, required: true },
   role: { type: String, default: 'employee' },
   status: { type: String, default: 'active' },
   needs_review: { type: Number, default: 0 }
@@ -26,6 +49,7 @@ const WebAuthnCredentialSchema = new mongoose.Schema({
   counter: { type: Number, default: 0 },
   transports: String,
   created_at: { type: String, required: true },
+  last_used_at: String,
   status: { type: String, default: 'active' }
 });
 
@@ -156,7 +180,6 @@ const models = {
   CorrectionRequest: mongoose.models.CorrectionRequest || mongoose.model('CorrectionRequest', CorrectionRequestSchema)
 };
 
-// In-Memory Collections Store (Fast local fallback when MONGODB_URI is not connected)
 const memoryDb = {
   employees: [],
   sessions: [],
@@ -172,12 +195,33 @@ const memoryDb = {
 };
 
 let useRealMongo = false;
+let dbInitializationError = null;
 
 async function initDb() {
+  dbInitializationError = null;
+
+  if (process.env.NODE_ENV === 'production') {
+    if (!process.env.MONGODB_URI || process.env.MONGODB_URI.trim() === '') {
+      dbInitializationError = new Error('MONGODB_URI environment variable is required in production.');
+      useRealMongo = false;
+      console.error('CRITICAL PRODUCTION DATABASE ERROR:', dbInitializationError.message);
+      return false;
+    }
+  }
+
   if (process.env.MONGODB_URI && process.env.MONGODB_URI.trim() !== '') {
-    if (mongoose.connection.readyState === 0) {
-      await mongoose.connect(process.env.MONGODB_URI.trim());
-      useRealMongo = true;
+    try {
+      if (mongoose.connection.readyState === 0) {
+        await mongoose.connect(process.env.MONGODB_URI.trim());
+        useRealMongo = true;
+      }
+    } catch (err) {
+      dbInitializationError = err;
+      console.error('MongoDB connection error:', err);
+      if (process.env.NODE_ENV === 'production') {
+        useRealMongo = false;
+        return false;
+      }
     }
   }
 
@@ -199,9 +243,9 @@ async function initDb() {
     const empCount = await models.Employee.countDocuments({});
     if (empCount === 0) {
       await models.Employee.create([
-        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', role: 'employee', status: 'active' },
-        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', role: 'employee', status: 'active' },
-        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', role: 'admin', status: 'active' }
+        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active' },
+        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active' },
+        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active' }
       ]);
 
       await models.Shift.create([
@@ -229,9 +273,9 @@ async function initDb() {
 
     if (memoryDb.employees.length === 0) {
       memoryDb.employees.push(
-        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', role: 'employee', status: 'active', needs_review: 0 },
-        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', role: 'employee', status: 'active', needs_review: 0 },
-        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', role: 'admin', status: 'active', needs_review: 0 }
+        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active', needs_review: 0 }
       );
 
       memoryDb.shifts.push(
@@ -242,6 +286,12 @@ async function initDb() {
   }
 
   return true;
+}
+
+function checkDatabaseAvailability() {
+  if (process.env.NODE_ENV === 'production' && !useRealMongo) {
+    throw new Error('DATABASE_UNAVAILABLE: Production database connection required.');
+  }
 }
 
 function getCollectionName(sql) {
@@ -292,6 +342,7 @@ function parseWhereFilter(sql, params) {
 }
 
 async function queryAll(sql, params = []) {
+  checkDatabaseAvailability();
   const collectionName = getCollectionName(sql);
   if (!collectionName) return [];
 
@@ -302,8 +353,11 @@ async function queryAll(sql, params = []) {
     for (const key in filter) {
       if (typeof filter[key] === 'object' && filter[key].$gte) {
         if (!(item[key] >= filter[key].$gte)) return false;
-      } else if (item[key] !== filter[key]) {
-        return false;
+      } else {
+        const itemVal = item[key] !== undefined ? item[key] : (key === 'status' ? 'active' : undefined);
+        if (itemVal !== filter[key]) {
+          return false;
+        }
       }
     }
     return true;
@@ -339,6 +393,7 @@ async function queryAll(sql, params = []) {
 }
 
 async function queryGet(sql, params = []) {
+  checkDatabaseAvailability();
   const collectionName = getCollectionName(sql);
   if (!collectionName) return null;
 
@@ -361,6 +416,7 @@ async function queryGet(sql, params = []) {
 }
 
 async function queryRun(sql, params = []) {
+  checkDatabaseAvailability();
   const collectionName = getCollectionName(sql);
   const lower = sql.toLowerCase();
 
@@ -371,7 +427,7 @@ async function queryRun(sql, params = []) {
     if (colsMatch) {
       const cols = colsMatch[1].split(',').map(c => c.trim());
       const valTokens = colsMatch[2].split(',').map(v => v.trim());
-      const doc = {};
+      const doc = { status: 'active' }; // Default status to active
       let paramIdx = 0;
 
       cols.forEach((col, idx) => {
@@ -446,6 +502,8 @@ module.exports = {
   isMongo: true,
   mongoose,
   models,
+  hashPassword,
+  verifyPassword,
   initDb,
   queryAll,
   queryGet,

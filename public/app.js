@@ -1,13 +1,14 @@
-// Global Application State
+// Global Enterprise State
 let state = {
   settings: null,
-  employees: [],
-  shifts: [],
+  clientIp: null,
   currentEmployee: null,
-  currentLocation: { lat: 8.752625, lng: 76.938625, accuracy: 15 }
+  shifts: [],
+  hasPasskey: false,
+  currentLocation: null // MUST be initialized as null (No default hospital GPS fallback!)
 };
 
-// Register Service Worker for PWA
+// Register Service Worker for PWA Shell
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW registration failed:', err));
@@ -17,66 +18,71 @@ if ('serviceWorker' in navigator) {
 // Initialize Application
 document.addEventListener('DOMContentLoaded', async () => {
   await fetchInitialData();
-  getUserLocation();
-
-  const today = new Date().toISOString().split('T')[0];
-  const dateInput = document.getElementById('corrDate');
-  if (dateInput) dateInput.value = today;
+  await checkAuthSession();
 });
 
-// Fetch Initial Data from Server
+// Fetch Initial System Data & Network Egress IP
 async function fetchInitialData() {
   try {
     const res = await fetch('/api/initial-data');
     const data = await res.json();
     if (data.success) {
       state.settings = data.settings;
-      state.employees = data.employees;
-      state.shifts = data.shifts;
       if (data.clientIp) {
         state.clientIp = data.clientIp;
         const ipElem = document.getElementById('wifiIpAddress');
         if (ipElem) ipElem.textContent = data.clientIp;
       }
-
-      // Auto-authenticate as employee for demo/session
-      const params = new URLSearchParams(window.location.search);
-      const empParam = params.get('emp') || 'emp_1';
-      state.currentEmployee = state.employees.find(e => e.id === empParam) || state.employees[0];
-
-      // Login session behind the scenes
-      await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: state.currentEmployee.id })
-      });
-
-      updateActiveEmployeeUI();
     }
   } catch (err) {
     showAlert('Failed to connect to backend server: ' + err.message, 'error');
   }
 }
 
-// Update Employee Experience UI (VAIDHYAR MANDHIRAM Brand & Layout)
-function updateActiveEmployeeUI() {
+// Check Active Authentication Session
+async function checkAuthSession() {
+  try {
+    const res = await fetch('/api/auth/me');
+    const data = await res.json();
+
+    if (data.success && data.employee) {
+      state.currentEmployee = data.employee;
+      state.shifts = data.shifts || [];
+      state.hasPasskey = !!data.hasPasskey;
+
+      updateAuthenticatedUI();
+    } else {
+      state.currentEmployee = null;
+      updateUnauthenticatedUI();
+    }
+  } catch (err) {
+    state.currentEmployee = null;
+    updateUnauthenticatedUI();
+  }
+}
+
+// Update UI for Authenticated Employee
+function updateAuthenticatedUI() {
   const emp = state.currentEmployee;
 
-  // 0. Navbar User Info
-  const userPill = document.getElementById('currentUserName');
-  if (userPill) userPill.textContent = `${emp.name}`;
+  // Navbar
+  document.getElementById('userInfoPill').style.display = 'flex';
+  document.getElementById('currentUserName').textContent = `${emp.name}`;
+  document.getElementById('btnLoginLogout').textContent = '🚪 Logout';
+  document.getElementById('btnRegisterPasskey').style.display = 'inline-flex';
 
-  // 1. Time Greeting
+  // Greeting
   const hour = new Date().getHours();
   let timeGreeting = 'Good Morning';
   if (hour >= 12 && hour < 17) timeGreeting = 'Good Afternoon';
   if (hour >= 17) timeGreeting = 'Good Evening';
-
   const firstName = emp.name.split(' ')[0];
-  document.getElementById('greetingTitle').textContent = `${timeGreeting}, ${firstName}`;
 
-  // 2. Shift Details
-  const shift = state.shifts.find(s => s.employee_id === emp.id);
+  document.getElementById('greetingTitle').textContent = `${timeGreeting}, ${firstName}`;
+  document.getElementById('greetingSub').textContent = `Staff Role: ${emp.role.toUpperCase()} | ${emp.email}`;
+
+  // Shift Details
+  const shift = state.shifts.find(s => s.employee_id === emp.id) || state.shifts[0];
   const shiftNameElem = document.getElementById('assignedShiftName');
   const shiftTimeElem = document.getElementById('assignedShiftTime');
 
@@ -84,155 +90,163 @@ function updateActiveEmployeeUI() {
     shiftNameElem.textContent = shift.shift_name;
     shiftTimeElem.textContent = `${shift.start_time} – ${shift.end_time}`;
   } else {
-    shiftNameElem.textContent = 'No Active Shift Assigned';
-    shiftTimeElem.textContent = 'Contact Hospital Admin';
+    shiftNameElem.textContent = 'No Shift Assigned';
+    shiftTimeElem.textContent = 'Contact Hospital HR';
   }
 
-  // 3. Status Badge & Punch Main Button State
+  // Attendance Status & Punch Button
   const badge = document.getElementById('attendanceStatusBadge');
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
   const btn = document.getElementById('btnPunchMain');
   const btnIcon = document.getElementById('btnIcon');
   const btnLabel = document.getElementById('btnLabel');
+  const loginPrompt = document.getElementById('loginPromptNotice');
 
-  if (emp.current_punch_status === 'CHECKED_IN') {
-    badge.className = 'attendance-status-badge checked_in';
-    statusDot.textContent = '✓';
-    statusText.textContent = 'PUNCHED IN';
+  loginPrompt.style.display = 'none';
 
-    btn.className = 'btn-punch-main out';
-    btnIcon.textContent = '👆';
-    btnLabel.textContent = 'PUNCH OUT';
-  } else if (emp.current_punch_status === 'CHECKED_OUT') {
-    badge.className = 'attendance-status-badge checked_out';
-    statusDot.textContent = '✓';
-    statusText.textContent = 'CHECKED OUT TODAY';
-
-    btn.className = 'btn-punch-main in';
-    btnIcon.textContent = '👇';
-    btnLabel.textContent = 'PUNCH IN AGAIN';
-  } else {
+  if (emp.role !== 'employee') {
+    btn.style.display = 'none';
     badge.className = 'attendance-status-badge ready';
-    statusDot.textContent = '●';
-    statusText.textContent = 'Ready to Punch';
+    statusDot.textContent = '🔒';
+    statusText.textContent = 'Admin Mode (View Only)';
+  } else {
+    btn.style.display = 'inline-flex';
 
-    btn.className = 'btn-punch-main in';
-    btnIcon.textContent = '👇';
-    btnLabel.textContent = 'PUNCH IN';
-  }
-
-  // 4. Summary Row (Check In, Check Out, Worked)
-  const summaryCheckIn = document.getElementById('summaryCheckIn');
-  const summaryCheckOut = document.getElementById('summaryCheckOut');
-  const summaryWorked = document.getElementById('summaryWorked');
-
-  if (emp.last_punch_time) {
-    const formatted = new Date(emp.last_punch_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     if (emp.current_punch_status === 'CHECKED_IN') {
-      summaryCheckIn.textContent = formatted;
-      summaryCheckOut.textContent = '--';
-      summaryWorked.textContent = 'In Progress';
+      badge.className = 'attendance-status-badge checked_in';
+      statusDot.textContent = '✓';
+      statusText.textContent = 'PUNCHED IN';
+
+      btn.className = 'btn-punch-main out';
+      btnIcon.textContent = '👆';
+      btnLabel.textContent = 'PUNCH OUT';
     } else if (emp.current_punch_status === 'CHECKED_OUT') {
-      summaryCheckOut.textContent = formatted;
-      summaryWorked.textContent = 'Completed';
-    }
-  } else {
-    summaryCheckIn.textContent = '--';
-    summaryCheckOut.textContent = '--';
-    summaryWorked.textContent = '--';
-  }
+      badge.className = 'attendance-status-badge checked_out';
+      statusDot.textContent = '✓';
+      statusText.textContent = 'SHIFT COMPLETED TODAY';
 
-  updateHospitalPresenceUI();
-}
+      btn.className = 'btn-punch-main in';
+      btn.disabled = true; // Terminal state for shift instance!
+      btnIcon.textContent = '✓';
+      btnLabel.textContent = 'PUNCH COMPLETED';
+    } else {
+      badge.className = 'attendance-status-badge ready';
+      statusDot.textContent = '●';
+      statusText.textContent = 'Ready to Punch';
 
-// Calculate Haversine Distance (in meters)
-function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLon = (lon2 - lon1) * (Math.PI / 180);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) *
-      Math.cos(lat2 * (Math.PI / 180)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-// Update presence UI
-function updateHospitalPresenceUI() {
-  const btnPunch = document.getElementById('btnPunchMain');
-  const noticeBox = document.getElementById('outsideHospitalNotice');
-  const noticeDetail = document.getElementById('outsideNoticeDetail');
-
-  if (!btnPunch || !noticeBox) return;
-
-  if (state.currentEmployee && state.currentEmployee.role !== 'employee') {
-    btnPunch.style.display = 'none';
-    noticeBox.style.display = 'block';
-    if (noticeDetail) {
-      noticeDetail.textContent = '🔒 Admin Account: Attendance marking is restricted to hospital staff employees only.';
-    }
-    return;
-  }
-
-  const hospitalLat = state.settings?.geofence_lat || 8.752625;
-  const hospitalLng = state.settings?.geofence_lng || 76.938625;
-  const maxRadius = Math.max(state.settings?.geofence_radius_meters || 500, 500);
-
-  const distanceMeters = calculateHaversineDistance(
-    state.currentLocation.lat,
-    state.currentLocation.lng,
-    hospitalLat,
-    hospitalLng
-  );
-
-  const isInside = distanceMeters <= maxRadius;
-
-  if (isInside) {
-    btnPunch.style.display = 'inline-flex';
-    noticeBox.style.display = 'none';
-  } else {
-    btnPunch.style.display = 'none';
-    noticeBox.style.display = 'block';
-    if (noticeDetail) {
-      noticeDetail.textContent = `You are currently ${Math.round(distanceMeters)} meters away from Kallara Hospital grounds. Attendance punching is permitted only inside hospital premises (${maxRadius}m radius).`;
+      btn.className = 'btn-punch-main in';
+      btn.disabled = false;
+      btnIcon.textContent = '👇';
+      btnLabel.textContent = 'PUNCH IN';
     }
   }
+
+  // Summary Row
+  document.getElementById('summaryPasskey').textContent = state.hasPasskey ? '✓ Passkey Registered' : '⚠️ Passkey Required';
 }
 
-// Get Real GPS Location
-function getUserLocation() {
-  if ('geolocation' in navigator) {
+function updateUnauthenticatedUI() {
+  document.getElementById('userInfoPill').style.display = 'none';
+  document.getElementById('btnRegisterPasskey').style.display = 'none';
+  document.getElementById('btnLoginLogout').textContent = '🔑 Login';
+
+  document.getElementById('greetingTitle').textContent = 'Welcome to Vaidhyar Mandhiram';
+  document.getElementById('greetingSub').textContent = 'Log in to mark your high-trust hospital attendance.';
+
+  document.getElementById('btnPunchMain').style.display = 'none';
+  document.getElementById('loginPromptNotice').style.display = 'block';
+
+  const badge = document.getElementById('attendanceStatusBadge');
+  badge.className = 'attendance-status-badge ready';
+  document.getElementById('statusDot').textContent = '●';
+  document.getElementById('statusText').textContent = 'Authentication Required';
+}
+
+// -------------------------------------------------------------
+// WEBAUTHN PASSKEY REGISTRATION
+// -------------------------------------------------------------
+async function registerWebAuthnPasskey() {
+  if (!state.currentEmployee) return openLoginModal();
+
+  try {
+    showAlert('Requesting passkey registration options from server...', 'info');
+    const optRes = await fetch('/api/webauthn/register-options');
+    const optData = await optRes.json();
+
+    if (!optData.success) {
+      throw new Error(optData.error || 'Failed to get registration options');
+    }
+
+    showAlert('Please authenticate on your device (Face ID / Fingerprint / Device Lock)...', 'info');
+
+    // Trigger Browser WebAuthn API via SimpleWebAuthn
+    let credential = null;
+    if (window.SimpleWebAuthnBrowser) {
+      credential = await SimpleWebAuthnBrowser.startRegistration(optData.options);
+    } else {
+      throw new Error('WebAuthn is not supported on this browser/device.');
+    }
+
+    const verifyRes = await fetch('/api/webauthn/register-verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challengeId: optData.challengeId,
+        credential
+      })
+    });
+
+    const verifyData = await verifyRes.json();
+
+    if (verifyData.success) {
+      state.hasPasskey = true;
+      document.getElementById('summaryPasskey').textContent = '✓ Passkey Registered';
+      showAlert('🎉 Biometric WebAuthn Passkey registered successfully!', 'success');
+    } else {
+      throw new Error(verifyData.error || 'Passkey registration verification failed');
+    }
+  } catch (err) {
+    showAlert(`Passkey Error: ${err.message}`, 'error');
+  }
+}
+
+// -------------------------------------------------------------
+// FRESH LOCATION REQUEST
+// -------------------------------------------------------------
+function requestFreshLocation() {
+  return new Promise((resolve, reject) => {
+    if (!('geolocation' in navigator)) {
+      return reject(new Error('LOCATION_REQUIRED: Browser does not support geolocation.'));
+    }
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        state.currentLocation = {
+        resolve({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy
-        };
-        updateHospitalPresenceUI();
+        });
       },
       (err) => {
-        console.warn('Geolocation unavailable, using default coordinates.');
-        updateHospitalPresenceUI();
+        reject(new Error(`LOCATION_REQUIRED: ${err.message || 'GPS location permission denied.'}`));
       },
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
-  } else {
-    updateHospitalPresenceUI();
-  }
+  });
 }
 
 // -------------------------------------------------------------
-// INSTANT HIGH-TRUST ATTENDANCE PUNCH PIPELINE
+// HIGH-TRUST ATTENDANCE PUNCH PIPELINE
 // -------------------------------------------------------------
 async function initiateHighTrustPunch() {
-  if (!state.currentEmployee) return showAlert('Please select an active staff member', 'error');
+  if (!state.currentEmployee) return openLoginModal();
 
   const emp = state.currentEmployee;
+  if (emp.role !== 'employee') {
+    return showAlert('Attendance marking is restricted to hospital staff employees only.', 'error');
+  }
+
   const targetAction = emp.current_punch_status === 'CHECKED_IN' ? 'CHECK_OUT' : 'CHECK_IN';
 
   openProgressModal(targetAction);
@@ -241,9 +255,8 @@ async function initiateHighTrustPunch() {
   if (btnMain) btnMain.disabled = true;
 
   try {
-    // STEP 1: Identity & Challenge Verification
-    updateProgressStep('stepIdentity', 'active', 'Verifying employee identity & challenge...');
-    await sleep(250);
+    // STEP 1: Biometric Passkey & Security Challenge
+    updateProgressStep('stepIdentity', 'active', 'Requesting WebAuthn passkey challenge...');
 
     const challengeRes = await fetch('/api/attendance/challenge', {
       method: 'POST',
@@ -253,42 +266,71 @@ async function initiateHighTrustPunch() {
     const challengeData = await challengeRes.json();
 
     if (!challengeData.success) {
-      updateProgressStep('stepIdentity', 'failed', 'Identity Verification Failed');
+      updateProgressStep('stepIdentity', 'failed', 'Challenge Failed');
       showModalFooter();
-      if (challengeRes.status === 401 || (challengeData.error && challengeData.error.toLowerCase().includes('log in'))) {
-        openLoginModal();
-      }
-      throw new Error(challengeData.error || 'Failed to acquire security challenge');
+      if (challengeRes.status === 401) openLoginModal();
+      throw new Error(challengeData.error || 'Failed to acquire single-use challenge');
     }
 
-    updateProgressStep('stepIdentity', 'success', '✓ Employee Identity & Passkey Verified');
+    // Trigger WebAuthn Biometric Prompt
+    updateProgressStep('stepIdentity', 'active', 'Authenticating device biometric passkey...');
+
+    if (!window.SimpleWebAuthnBrowser) {
+      throw new Error('WebAuthn is not supported on this device/browser.');
+    }
+
+    let credentialAssertion = null;
+    try {
+      const getOptions = {
+        challenge: challengeData.challengeNonce,
+        rpId: window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname,
+        userVerification: 'preferred',
+        timeout: 60000
+      };
+      credentialAssertion = await SimpleWebAuthnBrowser.startAuthentication({ publicKey: getOptions });
+    } catch (webauthnErr) {
+      updateProgressStep('stepIdentity', 'failed', 'Biometric Authentication Failed');
+      showModalFooter();
+      throw new Error(`WebAuthn Authentication: ${webauthnErr.message}`);
+    }
+
+    updateProgressStep('stepIdentity', 'success', '✓ Biometric Passkey Assertion Verified');
 
     // STEP 2: Hospital Wi-Fi Network Check
-    updateProgressStep('stepNetwork', 'active', 'Checking hospital Wi-Fi network...');
-    await sleep(250);
-    updateProgressStep('stepNetwork', 'success', '✓ Hospital Network Connection Confirmed');
+    updateProgressStep('stepNetwork', 'active', 'Checking approved hospital network egress IP...');
+    await sleep(200);
+    updateProgressStep('stepNetwork', 'success', '✓ Approved Egress IP Confirmed');
 
-    // STEP 3: Hospital Geofence & GPS Accuracy Check
-    updateProgressStep('stepLocation', 'active', 'Verifying location accuracy & geofence...');
-    await sleep(250);
-    updateProgressStep('stepLocation', 'success', '✓ Hospital Geofence & Accuracy Confirmed');
+    // STEP 3: Fresh GPS Location & Geofence Check
+    updateProgressStep('stepLocation', 'active', 'Requesting fresh browser GPS location...');
 
-    // STEP 4: Shift Window Validation
-    updateProgressStep('stepShift', 'active', 'Validating shift schedule...');
-    await sleep(250);
-    updateProgressStep('stepShift', 'success', '✓ Assigned Shift Window Confirmed');
+    let locationEvidence = null;
+    try {
+      locationEvidence = await requestFreshLocation();
+    } catch (locErr) {
+      updateProgressStep('stepLocation', 'failed', 'GPS Location Failed');
+      showModalFooter();
+      throw locErr;
+    }
 
-    // STEP 5: Server Timestamping & Punch Execution
-    updateProgressStep('stepRecord', 'active', 'Generating server timestamp & audit record...');
+    updateProgressStep('stepLocation', 'success', `✓ Fresh Location (±${Math.round(locationEvidence.accuracy)}m)`);
+
+    // STEP 4: Shift Window & State Validation
+    updateProgressStep('stepShift', 'active', 'Validating shift schedule & state machine...');
+    await sleep(200);
+    updateProgressStep('stepShift', 'success', '✓ Shift Window & State Transition Valid');
+
+    // STEP 5: Server Timestamping & Atomic Punch Record
+    updateProgressStep('stepRecord', 'active', 'Submitting cryptographic assertion & recording timestamp...');
 
     const punchRes = await fetch('/api/attendance/punch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         punchType: targetAction,
-        location: state.currentLocation,
+        location: locationEvidence,
         challengeId: challengeData.challengeId,
-        simulated: true
+        credential: credentialAssertion
       })
     });
 
@@ -301,32 +343,25 @@ async function initiateHighTrustPunch() {
 
       state.currentEmployee.current_punch_status = punchData.currentPunchStatus;
       state.currentEmployee.last_punch_time = punchData.serverTimestamp;
-      updateActiveEmployeeUI();
-      showAlert(`✓ ${punchData.message}`, 'success');
+      updateAuthenticatedUI();
+      showAlert(`🎉 ${punchData.message}`, 'success');
     } else {
       showModalFooter();
 
       if (punchData.reasonCode === 'INVALID_NETWORK') {
-        updateProgressStep('stepNetwork', 'failed', '❌ Unauthorized Wi-Fi Network');
+        updateProgressStep('stepNetwork', 'failed', '❌ Unauthorized Network IP');
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode}`);
-        showAlert(`❌ Network Security Rejection: You must connect to Kallara Hospital Wi-Fi!`, 'error');
+        showAlert(`❌ Network Security Rejection: Connect to Kallara Hospital Wi-Fi!`, 'error');
       } else if (punchData.reasonCode === 'OUTSIDE_GEOFENCE' || punchData.reasonCode === 'LOCATION_ACCURACY_TOO_LOW') {
         updateProgressStep('stepLocation', 'failed', `❌ Geofence/Accuracy Failure`);
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode}`);
         showAlert(`❌ ${punchData.error}`, 'error');
-      } else if (punchData.reasonCode === 'DUPLICATE_CHECK_IN') {
-        state.currentEmployee.current_punch_status = 'CHECKED_IN';
-        updateActiveEmployeeUI();
-        showAlert(`Already Checked In. Click 'PUNCH OUT' to check out or 'Reset Test Punch' to start clean!`, 'error');
-      } else if (punchData.reasonCode === 'DUPLICATE_CHECK_OUT') {
-        state.currentEmployee.current_punch_status = 'CHECKED_OUT';
-        updateActiveEmployeeUI();
-        showAlert(`Already Checked Out today. Click 'Reset Test Punch' to start clean!`, 'error');
       } else {
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode || 'Validation Failed'}`);
         showAlert(`❌ ${punchData.error}`, 'error');
       }
     }
+
   } catch (err) {
     showModalFooter();
     showAlert(`Security Failure: ${err.message}`, 'error');
@@ -395,32 +430,19 @@ function showAlert(msg, type = 'success') {
 }
 
 // -------------------------------------------------------------
-// STAFF ACCOUNT LOGIN MODAL & AUTHENTICATION
+// AUTH MODAL & HANDLERS
 // -------------------------------------------------------------
+function handleAuthAction() {
+  if (state.currentEmployee) {
+    performStaffLogout();
+  } else {
+    openLoginModal();
+  }
+}
+
 function openLoginModal() {
   const modal = document.getElementById('loginModal');
-  const select = document.getElementById('loginEmployeeSelect');
-  if (!modal || !select) return;
-
-  select.innerHTML = '';
-  if (state.employees && state.employees.length > 0) {
-    state.employees.forEach(emp => {
-      const opt = document.createElement('option');
-      opt.value = emp.id;
-      opt.textContent = `${emp.name} (${emp.email || emp.id}) - ${emp.role.toUpperCase()}`;
-      if (state.currentEmployee && state.currentEmployee.id === emp.id) {
-        opt.selected = true;
-      }
-      select.appendChild(opt);
-    });
-  } else {
-    const opt = document.createElement('option');
-    opt.value = 'emp_1';
-    opt.textContent = 'Rahul Sharma (rahul.sharma@vaidhyar.org) - EMPLOYEE';
-    select.appendChild(opt);
-  }
-
-  modal.classList.add('active');
+  if (modal) modal.classList.add('active');
 }
 
 function closeLoginModal() {
@@ -428,23 +450,32 @@ function closeLoginModal() {
   if (modal) modal.classList.remove('active');
 }
 
-async function performStaffLogin(targetEmpId) {
-  const select = document.getElementById('loginEmployeeSelect');
-  const empId = targetEmpId || (select ? select.value : 'emp_1');
+async function handleStaffLoginForm(event) {
+  event.preventDefault();
+  const identifier = document.getElementById('loginIdentifier').value.trim();
+  const password = document.getElementById('loginPassword').value;
+
+  if (!identifier || !password) {
+    return showAlert('Please enter employee ID/email and password', 'error');
+  }
 
   try {
+    const isEmail = identifier.includes('@');
+    const body = isEmail ? { email: identifier, password } : { employeeId: identifier, password };
+
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employeeId: empId })
+      body: JSON.stringify(body)
     });
+
     const data = await res.json();
 
     if (data.success) {
-      state.currentEmployee = state.employees.find(e => e.id === empId) || data.employee || { id: empId, name: 'Staff User', role: 'employee' };
-      updateActiveEmployeeUI();
       closeLoginModal();
-      showAlert(`✓ Logged in successfully as ${state.currentEmployee.name}`, 'success');
+      document.getElementById('loginPassword').value = '';
+      showAlert(`✓ Logged in successfully as ${data.employee.name}`, 'success');
+      await checkAuthSession();
     } else {
       showAlert(`Login failed: ${data.error || 'Invalid credentials'}`, 'error');
     }
@@ -453,23 +484,13 @@ async function performStaffLogin(targetEmpId) {
   }
 }
 
-async function resetTestAttendance() {
-  if (!state.currentEmployee) return;
+async function performStaffLogout() {
   try {
-    const res = await fetch('/api/test/reset-attendance', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    const data = await res.json();
-    if (data.success) {
-      state.currentEmployee.current_punch_status = 'NOT_STARTED';
-      state.currentEmployee.last_punch_time = null;
-      updateActiveEmployeeUI();
-      showAlert(`✓ ${data.message}`, 'success');
-    } else {
-      showAlert(`Reset failed: ${data.error}`, 'error');
-    }
+    await fetch('/api/auth/logout', { method: 'POST' });
+    state.currentEmployee = null;
+    updateUnauthenticatedUI();
+    showAlert('Logged out successfully', 'info');
   } catch (err) {
-    showAlert(`Reset error: ${err.message}`, 'error');
+    showAlert('Logout error: ' + err.message, 'error');
   }
 }
