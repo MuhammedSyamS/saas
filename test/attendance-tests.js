@@ -1,22 +1,36 @@
 const http = require('http');
+const app = require('../src/app');
+const { initDb, queryRun } = require('../src/db');
 
-const BASE_URL = 'http://localhost:3000';
+let server = null;
+let BASE_URL = '';
+let sessionCookie = '';
 
-function makeRequest(path, method = 'GET', body = null) {
+function makeRequest(path, method = 'GET', body = null, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(BASE_URL + path);
+    const headers = {
+      'Content-Type': 'application/json',
+      ...extraHeaders
+    };
+    if (sessionCookie) {
+      headers['Cookie'] = sessionCookie;
+    }
+
     const options = {
       hostname: url.hostname,
       port: url.port,
       path: url.pathname + url.search,
       method: method,
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      headers
     };
 
     const req = http.request(options, (res) => {
       let data = '';
+      if (res.headers['set-cookie']) {
+        const cookieHeader = res.headers['set-cookie'][0];
+        sessionCookie = cookieHeader.split(';')[0];
+      }
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try {
@@ -34,7 +48,23 @@ function makeRequest(path, method = 'GET', body = null) {
 }
 
 async function runTestSuite() {
-  console.log('🧪 Starting High-Trust Attendance Automated Security Test Suite...\n');
+  console.log('🧪 Starting High-Trust Attendance Security & Vercel Verification Suite...\n');
+
+  await initDb();
+  await queryRun('DELETE FROM shift_instances');
+  await queryRun('DELETE FROM challenges');
+  await queryRun('DELETE FROM attendance_records');
+  await queryRun('DELETE FROM attendance_attempts');
+  await queryRun('DELETE FROM sessions');
+  await new Promise((resolve) => {
+    server = app.listen(0, () => {
+      const port = server.address().port;
+      BASE_URL = `http://localhost:${port}`;
+      console.log(`Test server running on ${BASE_URL}\n`);
+      resolve();
+    });
+  });
+
   let passed = 0;
   let failed = 0;
 
@@ -49,125 +79,196 @@ async function runTestSuite() {
     }
   }
 
-  // TEST 1: Initial System Data Loading
-  await testCase('1. Server initial data & system settings loading', async () => {
+  // 1. Initial System Data Loading
+  await testCase('1. Initial server system data & settings loading', async () => {
     const res = await makeRequest('/api/initial-data');
     if (res.status !== 200 || !res.body.success) throw new Error('Failed to load initial server settings');
   });
 
-  // TEST 2: Single-Use Security Challenge Generation
+  // 2. Reject Unauthenticated Requests
+  await testCase('2. Reject unauthenticated request without session token', async () => {
+    const res = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
+    if (res.status !== 401 || res.body.reasonCode !== 'UNAUTHENTICATED') {
+      throw new Error(`Expected 401 UNAUTHENTICATED but got status ${res.status}: ${JSON.stringify(res.body)}`);
+    }
+  });
+
+  // 3. Employee Session Login
+  await testCase('3. Authenticated employee session login', async () => {
+    const res = await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_1' });
+    if (res.status !== 200 || !res.body.sessionId) throw new Error('Employee login failed');
+  });
+
+  // 4. Generate Single-Use Challenge Token
   let challengeId = null;
-  await testCase('2. Generate single-use security challenge token', async () => {
-    const res = await makeRequest('/api/attendance/challenge', 'POST', { employeeId: 'emp_1', action: 'CHECK_IN' });
+  await testCase('4. Generate single-use security challenge token', async () => {
+    const res = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
     if (res.status !== 200 || !res.body.challengeId) throw new Error('Failed to generate challenge token');
     challengeId = res.body.challengeId;
   });
 
-  // TEST 3: Valid Punch In
-  await testCase('3. Valid Punch In with full security compliance', async () => {
+  // 5. Valid Punch In
+  await testCase('5. Valid Punch In with full security compliance', async () => {
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_1',
       punchType: 'CHECK_IN',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 15 },
-      simulated_ip: '192.168.86.2',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
       challengeId: challengeId,
       simulated: true
     });
     if (res.status !== 200 || !res.body.success) throw new Error(res.body.error || 'Valid Punch In failed');
   });
 
-  // TEST 4: Duplicate Punch In Prevention
-  await testCase('4. Duplicate Punch In prevention (DUPLICATE_CHECK_IN)', async () => {
+  // 6. Duplicate Punch In Prevention
+  await testCase('6. Duplicate Punch In prevention (DUPLICATE_CHECK_IN)', async () => {
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_1',
       punchType: 'CHECK_IN',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 15 },
-      simulated_ip: '192.168.86.2',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
+      challengeId: chRes.body.challengeId,
       simulated: true
     });
     if (res.body.reasonCode !== 'DUPLICATE_CHECK_IN') throw new Error(`Expected DUPLICATE_CHECK_IN but got ${res.body.reasonCode}`);
   });
 
-  // TEST 5: Reused Challenge Protection
-  await testCase('5. Single-use challenge replay prevention (CHALLENGE_ALREADY_USED)', async () => {
+  // 7. Single-Use Challenge Replay Prevention
+  await testCase('7. Single-use challenge replay prevention (CHALLENGE_ALREADY_USED)', async () => {
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_1',
       punchType: 'CHECK_OUT',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 15 },
-      simulated_ip: '192.168.86.2',
-      challengeId: challengeId,
-      simulated: false
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
+      challengeId: challengeId, // Reusing previously consumed challenge
+      simulated: true
     });
-    if (res.body.reasonCode !== 'CHALLENGE_EXPIRED' && res.body.reasonCode !== 'CHALLENGE_ALREADY_USED' && res.body.reasonCode !== 'AUTHENTICATION_FAILED') {
-      throw new Error(`Expected challenge reuse rejection but got: ${res.body.reasonCode}`);
+    if (res.body.reasonCode !== 'CHALLENGE_ALREADY_USED') {
+      throw new Error(`Expected CHALLENGE_ALREADY_USED but got: ${res.body.reasonCode}`);
     }
   });
 
-  // TEST 6: Invalid Hospital Network Rejection
-  await testCase('6. Invalid hospital network IP rejection (INVALID_NETWORK)', async () => {
+  // 8. Expired Challenge Rejection
+  await testCase('8. Expired challenge rejection (CHALLENGE_EXPIRED)', async () => {
+    const expiredId = 'ch_expired_test';
+    await queryRun('DELETE FROM challenges WHERE id = ?', [expiredId]);
+    await queryRun(
+      `INSERT INTO challenges (id, employee_id, action, challenge, created_at, expires_at, used)
+       VALUES (?, 'emp_1', 'CHECK_OUT', 'nonce_expired', ?, ?, 0)`,
+      [expiredId, new Date().toISOString(), Date.now() - 10000]
+    );
+
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_2',
-      punchType: 'CHECK_IN',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 15 },
-      simulated_ip: '198.51.100.99', // Unauthorized IP
+      punchType: 'CHECK_OUT',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
+      challengeId: expiredId,
       simulated: true
     });
-    if (res.body.reasonCode !== 'INVALID_NETWORK') throw new Error(`Expected INVALID_NETWORK but got ${res.body.reasonCode}`);
+    if (res.body.reasonCode !== 'CHALLENGE_EXPIRED') throw new Error(`Expected CHALLENGE_EXPIRED but got ${res.body.reasonCode}`);
   });
 
-  // TEST 7: Outside Geofence Rejection
-  await testCase('7. Outside hospital geofence rejection (OUTSIDE_GEOFENCE)', async () => {
+  // 9. Unauthorized Hospital Network Rejection (Enforce Mode)
+  await testCase('9. Unauthorized hospital network IP rejection in enforce mode (INVALID_NETWORK)', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_admin' });
+    await makeRequest('/api/admin/settings', 'POST', {
+      hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
+      geofence_lat: 8.752625,
+      geofence_lng: 76.938625,
+      geofence_radius_meters: 120,
+      max_allowed_accuracy_meters: 60,
+      hospital_wifi_ips: '["103.15.22.4"]',
+      network_enforcement_mode: 'enforce'
+    });
+
+    const emp2Login = await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_2' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
+
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_2',
+      punchType: 'CHECK_IN',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '198.51.100.99', // Unauthorized Public IP
+      challengeId: chRes.body.challengeId,
+      simulated: true
+    });
+    if (res.body.reasonCode !== 'INVALID_NETWORK') {
+      throw new Error(`Expected INVALID_NETWORK but got ${res.body.reasonCode}`);
+    }
+
+    // Revert network enforcement back to observe for remaining tests
+    await makeRequest('/api/admin/settings', 'POST', {
+      hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
+      geofence_lat: 8.752625,
+      geofence_lng: 76.938625,
+      geofence_radius_meters: 120,
+      max_allowed_accuracy_meters: 60,
+      hospital_wifi_ips: '["127.0.0.1", "::1"]',
+      network_enforcement_mode: 'observe'
+    });
+  });
+
+  // 10. Outside Geofence Rejection
+  await testCase('10. Outside hospital geofence rejection (OUTSIDE_GEOFENCE)', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_2' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
+
+    const res = await makeRequest('/api/attendance/punch', 'POST', {
       punchType: 'CHECK_IN',
       location: { lat: 8.790000, lng: 76.980000, accuracy: 15 }, // ~5km away from Kallara
-      simulated_ip: '192.168.86.2',
+      simulated_ip: '127.0.0.1',
+      challengeId: chRes.body.challengeId,
       simulated: true
     });
     if (res.body.reasonCode !== 'OUTSIDE_GEOFENCE') throw new Error(`Expected OUTSIDE_GEOFENCE but got ${res.body.reasonCode}`);
   });
 
-  // TEST 8: Low Location Accuracy Rejection
-  await testCase('8. Low location accuracy rejection (LOCATION_ACCURACY_TOO_LOW)', async () => {
+  // 11. Low Location Accuracy Rejection
+  await testCase('11. Low location accuracy rejection (LOCATION_ACCURACY_TOO_LOW)', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_2' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
+
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_2',
       punchType: 'CHECK_IN',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 250 }, // ±250m accuracy (threshold is 200m)
-      simulated_ip: '192.168.86.2',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 450 }, // ±450m (max allowed is 300m)
+      simulated_ip: '127.0.0.1',
+      challengeId: chRes.body.challengeId,
       simulated: true
     });
     if (res.body.reasonCode !== 'LOCATION_ACCURACY_TOO_LOW') throw new Error(`Expected LOCATION_ACCURACY_TOO_LOW but got ${res.body.reasonCode}`);
   });
 
-  // TEST 9: Valid Punch Out
-  await testCase('9. Valid Punch Out re-verification', async () => {
+  // 12. Valid Punch Out
+  await testCase('12. Valid Punch Out re-verification', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_1' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_OUT' });
+
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_1',
       punchType: 'CHECK_OUT',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 15 },
-      simulated_ip: '192.168.86.2',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
+      challengeId: chRes.body.challengeId,
       simulated: true
     });
     if (res.status !== 200 || !res.body.success) throw new Error(res.body.error || 'Punch Out failed');
   });
 
-  // TEST 10: Duplicate Punch Out Prevention
-  await testCase('10. Duplicate Punch Out prevention (DUPLICATE_CHECK_OUT)', async () => {
+  // 13. Duplicate Punch Out Prevention
+  await testCase('13. Duplicate Punch Out prevention (DUPLICATE_CHECK_OUT)', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_1' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_OUT' });
+
     const res = await makeRequest('/api/attendance/punch', 'POST', {
-      employeeId: 'emp_1',
       punchType: 'CHECK_OUT',
-      location: { lat: 8.750104, lng: 76.938646, accuracy: 15 },
-      simulated_ip: '192.168.86.2',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
+      challengeId: chRes.body.challengeId,
       simulated: true
     });
     if (res.body.reasonCode !== 'DUPLICATE_CHECK_OUT') throw new Error(`Expected DUPLICATE_CHECK_OUT but got ${res.body.reasonCode}`);
   });
 
-  // TEST 11: Attendance Correction Request Submission
-  let corrId = null;
-  await testCase('11. Attendance correction request submission', async () => {
+  // 14. Attendance Correction Request Submission
+  await testCase('14. Attendance correction request submission', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_1' });
     const res = await makeRequest('/api/corrections/request', 'POST', {
-      employeeId: 'emp_1',
       requestedDate: '2026-08-18',
       requestedPunchType: 'CHECK_IN',
       requestedTime: '07:05',
@@ -176,8 +277,9 @@ async function runTestSuite() {
     if (!res.body.success) throw new Error(res.body.error);
   });
 
-  // TEST 12: Admin Correction Review & Approval
-  await testCase('12. Admin correction approval workflow & audit trail', async () => {
+  // 15. Admin Correction Review & Approval Workflow
+  await testCase('15. Admin correction approval workflow & audit trail', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_admin' });
     const listRes = await makeRequest('/api/corrections/list');
     const reqItem = listRes.body.requests.find(r => r.employee_id === 'emp_1');
     if (!reqItem) throw new Error('Correction request item not found');
@@ -190,15 +292,48 @@ async function runTestSuite() {
     if (!reviewRes.body.success) throw new Error(reviewRes.body.error);
   });
 
-  // TEST 13: Audit Evidence & Security Logs Listing
-  await testCase('13. Comprehensive Audit Evidence & Reason Codes retrieval', async () => {
+  // 16. Attendance Attempt Logs & Reason Codes Retrieval
+  await testCase('16. Comprehensive Audit Evidence & Attendance Attempt logs retrieval', async () => {
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_admin' });
     const res = await makeRequest('/api/admin/audit-logs');
-    if (!res.body.logs || res.body.logs.length === 0) throw new Error('No audit evidence logs retrieved');
+    if (!res.body.logs || res.body.logs.length === 0) throw new Error('No audit logs retrieved');
+    if (!res.body.attempts || res.body.attempts.length === 0) throw new Error('No attendance attempts retrieved');
   });
+
+  // 17. Server Timestamp Generation Verification
+  await testCase('17. Server timestamp generation verification (Client time ignored)', async () => {
+    await queryRun('DELETE FROM shift_instances WHERE employee_id = ?', ['emp_2']);
+    await makeRequest('/api/auth/login', 'POST', { employeeId: 'emp_2' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
+    const fakeClientTime = '2000-01-01T00:00:00.000Z';
+
+    const res = await makeRequest('/api/attendance/punch', 'POST', {
+      punchType: 'CHECK_IN',
+      location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
+      simulated_ip: '127.0.0.1',
+      challengeId: chRes.body.challengeId,
+      simulated: true,
+      clientTimestamp: fakeClientTime // Attempted client time manipulation
+    });
+    if (!res.body.success) throw new Error('Punch failed');
+    if (res.body.serverTimestamp.startsWith('2000-01-01')) {
+      throw new Error('Server trusted client time instead of generating server time!');
+    }
+  });
+
+  server.close();
 
   console.log(`\n==================================================`);
   console.log(`🎉 TEST SUITE COMPLETE: ${passed} Passed, ${failed} Failed`);
   console.log(`==================================================\n`);
+
+  if (failed > 0) {
+    process.exit(1);
+  }
 }
 
-runTestSuite().catch(err => console.error('Test suite runner crashed:', err));
+runTestSuite().catch(err => {
+  console.error('Test suite runner crashed:', err);
+  if (server) server.close();
+  process.exit(1);
+});

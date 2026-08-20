@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/attendance-tests.js"
   },
   "keywords": [],
   "author": "",
@@ -15,9 +15,10 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "sqlite3": "^6.0.1"
+    "mongoose": "^8.0.0"
   }
 }
