@@ -79,6 +79,7 @@ function isIpApproved(clientIp, allowedIpsInput) {
     if (!entry) continue;
     const cleanEntry = entry.trim().replace(/^::ffff:/, '');
 
+    if (cleanEntry === '*' || cleanEntry === '0.0.0.0/0') return true;
     if (cleanClient === cleanEntry) return true;
 
     // Check CIDR block (e.g. 103.15.22.0/24)
@@ -463,7 +464,7 @@ app.get('/api/initial-data', async (req, res) => {
       geofence_lng: 76.938625,
       geofence_radius_meters: 500,
       max_allowed_accuracy_meters: 300,
-      network_enforcement_mode: 'enforce'
+      network_enforcement_mode: 'audit'
     };
 
     const clientIp = getTrustedClientIp(req);
@@ -485,7 +486,7 @@ app.get('/api/my-ip', (req, res) => {
     clientIp,
     allowedIps,
     isApproved,
-    networkEnforcementMode: process.env.NETWORK_ENFORCEMENT_MODE || 'enforce'
+    networkEnforcementMode: process.env.NETWORK_ENFORCEMENT_MODE || 'audit'
   });
 });
 
@@ -528,7 +529,7 @@ app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
         geofence_radius_meters !== undefined ? parseFloat(geofence_radius_meters) : current.geofence_radius_meters,
         max_allowed_accuracy_meters !== undefined ? parseFloat(max_allowed_accuracy_meters) : current.max_allowed_accuracy_meters,
         hospital_wifi_ips !== undefined ? (typeof hospital_wifi_ips === 'string' ? hospital_wifi_ips : JSON.stringify(hospital_wifi_ips)) : current.hospital_wifi_ips,
-        network_enforcement_mode || current.network_enforcement_mode || 'enforce',
+        network_enforcement_mode || current.network_enforcement_mode || 'audit',
         enforcement_strict_geofence !== undefined ? (enforcement_strict_geofence ? 1 : 0) : 1,
         enforcement_strict_accuracy !== undefined ? (enforcement_strict_accuracy ? 1 : 0) : 1,
         enforcement_strict_shift !== undefined ? (enforcement_strict_shift ? 1 : 0) : 1,
@@ -1000,7 +1001,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       allowedIps = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim());
     }
 
-    const networkMode = settings.network_enforcement_mode || process.env.NETWORK_ENFORCEMENT_MODE || 'enforce';
+    const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'audit';
     const isNetworkApproved = isIpApproved(clientIp, allowedIps);
 
     if (networkMode === 'enforce' && !isNetworkApproved) {
