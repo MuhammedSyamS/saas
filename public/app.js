@@ -518,7 +518,7 @@ function requestFreshLocation() {
 }
 
 // -------------------------------------------------------------
-// HIGH-TRUST ATTENDANCE PUNCH PIPELINE
+// HIGH-TRUST ATTENDANCE PUNCH PIPELINE (STRICT DUAL ENFORCEMENT)
 // -------------------------------------------------------------
 async function initiateHighTrustPunch() {
   if (!state.currentEmployee) return switchAuthTab('login');
@@ -542,7 +542,9 @@ async function initiateHighTrustPunch() {
   if (btnMain) btnMain.disabled = true;
 
   try {
-    // STEP 1: Biometric Passkey & Security Challenge
+    // -------------------------------------------------------------
+    // STEP 1: Biometric Passkey & Cryptographic Challenge Verification
+    // -------------------------------------------------------------
     updateProgressStep('stepIdentity', 'active', 'Requesting WebAuthn passkey challenge...');
 
     const { status: chStatus, data: challengeData } = await safeFetchJson('/api/attendance/challenge', {
@@ -574,7 +576,6 @@ async function initiateHighTrustPunch() {
 
     let credentialAssertion = null;
     try {
-      // Call Dual-Engine Authentication Helper (SimpleWebAuthn + Native Fallback)
       credentialAssertion = await webAuthnAuthenticate(challengeData.options);
     } catch (webauthnErr) {
       const readableErr = formatWebAuthnErrorMessage(webauthnErr);
@@ -585,20 +586,30 @@ async function initiateHighTrustPunch() {
 
     updateProgressStep('stepIdentity', 'success', '✓ Biometric Passkey Assertion Verified');
 
-    // STEP 2: Hospital Wi-Fi Network Check
+    // -------------------------------------------------------------
+    // STEP 2: Strict Approved Hospital Wi-Fi Network Check
+    // -------------------------------------------------------------
     updateProgressStep('stepNetwork', 'active', 'Checking approved hospital network egress IP...');
     try {
       const { data: ipData } = await safeFetchJson('/api/my-ip');
       if (ipData.networkEnforcementMode === 'enforce' && !ipData.isApproved) {
         updateProgressStep('stepNetwork', 'failed', `❌ Unauthorized Network IP (${ipData.clientIp})`);
+        updateProgressStep('stepRecord', 'failed', 'Rejected: Must connect to Hospital Wi-Fi');
+        showModalFooter();
+        throw new Error(`Unauthorized Network IP (${ipData.clientIp}). Connect to approved Hospital Wi-Fi!`);
       } else {
         updateProgressStep('stepNetwork', 'success', `✓ Egress IP Verified (${ipData.clientIp})`);
       }
-    } catch (e) {
+    } catch (ipErr) {
+      if (ipErr.message && ipErr.message.includes('Unauthorized Network IP')) {
+        throw ipErr;
+      }
       updateProgressStep('stepNetwork', 'success', '✓ Egress IP Logged');
     }
 
-    // STEP 3: Fresh GPS Location & Geofence Check
+    // -------------------------------------------------------------
+    // STEP 3: Strict Authoritative GPS Geofence Check
+    // -------------------------------------------------------------
     updateProgressStep('stepLocation', 'active', 'Requesting fresh browser GPS location...');
 
     let locationEvidence = null;
@@ -612,12 +623,16 @@ async function initiateHighTrustPunch() {
 
     updateProgressStep('stepLocation', 'success', `✓ Fresh Location (±${Math.round(locationEvidence.accuracy)}m)`);
 
+    // -------------------------------------------------------------
     // STEP 4: Shift Window & State Validation
+    // -------------------------------------------------------------
     updateProgressStep('stepShift', 'active', 'Validating shift schedule & state machine...');
     await sleep(200);
     updateProgressStep('stepShift', 'success', '✓ Shift Window & State Transition Valid');
 
-    // STEP 5: Server Timestamping & Atomic Punch Record
+    // -------------------------------------------------------------
+    // STEP 5: Server Timestamping & Atomic Dual-Enforced Punch Commit
+    // -------------------------------------------------------------
     updateProgressStep('stepRecord', 'active', 'Submitting cryptographic assertion & recording timestamp...');
 
     const { data: punchData } = await safeFetchJson('/api/attendance/punch', {
@@ -646,7 +661,7 @@ async function initiateHighTrustPunch() {
       if (punchData.reasonCode === 'INVALID_NETWORK') {
         updateProgressStep('stepNetwork', 'failed', '❌ Unauthorized Network IP');
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode}`);
-        showAlert(`❌ Network Security Rejection: Connect to Kallara Hospital Wi-Fi!`, 'error');
+        showAlert(`❌ Network Security Rejection: Connect to Hospital Wi-Fi!`, 'error');
       } else if (punchData.reasonCode === 'OUTSIDE_GEOFENCE' || punchData.reasonCode === 'LOCATION_ACCURACY_TOO_LOW') {
         updateProgressStep('stepLocation', 'failed', `❌ Geofence/Accuracy Failure`);
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode}`);
