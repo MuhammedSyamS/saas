@@ -462,7 +462,7 @@ app.get('/api/initial-data', async (req, res) => {
     const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {
       geofence_lat: 8.752625,
       geofence_lng: 76.938625,
-      geofence_radius_meters: 500,
+      geofence_radius_meters: 20000,
       max_allowed_accuracy_meters: 300,
       network_enforcement_mode: 'enforce'
     };
@@ -488,6 +488,33 @@ app.get('/api/my-ip', (req, res) => {
     isApproved,
     networkEnforcementMode: process.env.NETWORK_ENFORCEMENT_MODE || 'enforce'
   });
+});
+
+app.post('/api/hospital/calibrate-location', requireAuth, async (req, res) => {
+  try {
+    const { lat, lng, radiusMeters } = req.body;
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+      return res.status(400).json({ success: false, error: 'Valid latitude and longitude numbers required.' });
+    }
+
+    const current = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
+    const targetId = current.id || 1;
+    const targetRadius = radiusMeters ? parseFloat(radiusMeters) : 20000;
+
+    await queryRun(
+      `UPDATE system_settings SET geofence_lat = ?, geofence_lng = ?, geofence_radius_meters = ? WHERE id = ?`,
+      [parseFloat(lat), parseFloat(lng), targetRadius, targetId]
+    );
+
+    await logAuditEvent(req.user.id, req.user.name, 'SETTINGS_UPDATED', 'INFO', 'HOSPITAL_LOCATION_CALIBRATED', `Hospital location center updated to lat: ${lat}, lng: ${lng}, radius: ${targetRadius}m`);
+
+    res.json({
+      success: true,
+      message: `🎉 Hospital GPS center calibrated to Lat: ${lat}, Lng: ${lng} (Radius: ${targetRadius}m)!`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
@@ -1063,7 +1090,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
     const hospitalLat = parseFloat(settings.geofence_lat) || parseFloat(process.env.HOSPITAL_LAT) || 8.752625;
     const hospitalLng = parseFloat(settings.geofence_lng) || parseFloat(process.env.HOSPITAL_LNG) || 76.938625;
-    const geofenceRadiusMeters = parseFloat(settings.geofence_radius_meters) || parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500;
+    const geofenceRadiusMeters = parseFloat(settings.geofence_radius_meters) || parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 20000;
     const maxAccuracyMeters = parseFloat(settings.max_allowed_accuracy_meters) || parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300;
 
     distanceMeters = calculateHaversineDistance(lat, lng, hospitalLat, hospitalLng);

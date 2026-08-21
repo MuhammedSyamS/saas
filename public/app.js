@@ -31,6 +31,27 @@ function base64UrlToBuffer(base64url) {
   return bytes.buffer;
 }
 
+// Calibrate Hospital Location Center to Staff/Admin's Live GPS
+async function calibrateHospitalLocation() {
+  try {
+    showAlert('Requesting your current browser GPS coordinates...', 'info');
+    const loc = await requestFreshLocation();
+    const { data } = await safeFetchJson('/api/hospital/calibrate-location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: loc.lat, lng: loc.lng, radiusMeters: 20000 })
+    });
+    if (data.success) {
+      showAlert(data.message, 'success');
+      await fetchInitialData();
+    } else {
+      showAlert('Calibration error: ' + (data.error || 'Failed to calibrate'), 'error');
+    }
+  } catch (err) {
+    showAlert('Calibration error: ' + err.message, 'error');
+  }
+}
+
 // Dual-Engine WebAuthn Registration (SimpleWebAuthn + Native Fallback)
 async function webAuthnRegister(optionsJSON) {
   if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
