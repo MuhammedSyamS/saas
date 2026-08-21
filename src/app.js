@@ -59,14 +59,9 @@ function getTrustedClientIp(req) {
   return (remoteAddr || '127.0.0.1').replace(/^::ffff:/, '');
 }
 
-// IP & CIDR Subnet Matcher
-function isIpApproved(clientIp, allowedIpsInput) {
+// Strict Hospital Network & CIDR Subnet Matcher
+function isApprovedHospitalNetwork(clientIp, allowedIpsInput) {
   if (!clientIp) return false;
-
-  // On Vercel serverless deployment or audit mode, allow all client IPs for attendance testing
-  if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.DISABLE_IP_ENFORCEMENT === 'true') {
-    return true;
-  }
 
   let allowedList = [];
   if (Array.isArray(allowedIpsInput)) {
@@ -79,12 +74,13 @@ function isIpApproved(clientIp, allowedIpsInput) {
     }
   }
 
-  // Wildcard allow all
-  if (allowedList.includes('*') || allowedList.includes('0.0.0.0/0')) return true;
+  if ((!allowedList || allowedList.length === 0) && process.env.HOSPITAL_ALLOWED_PUBLIC_IPS) {
+    allowedList = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim());
+  }
 
   // Include default hospital IPs if allowedList is empty
-  if (allowedList.length === 0) {
-    allowedList = ['127.0.0.1', '::1', '103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5'];
+  if (!allowedList || allowedList.length === 0) {
+    allowedList = ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
   }
 
   const cleanClient = clientIp.replace(/^::ffff:/, '');
@@ -93,14 +89,14 @@ function isIpApproved(clientIp, allowedIpsInput) {
     if (!entry) continue;
     const cleanEntry = entry.trim().replace(/^::ffff:/, '');
 
-    if (cleanEntry === '*' || cleanEntry === '0.0.0.0/0') return true;
+    // Exact IP Match
     if (cleanClient === cleanEntry) return true;
 
-    // Check CIDR block (e.g. 103.170.54.0/24 or 103.15.22.0/24)
+    // Strict CIDR Block Match (e.g. 103.170.54.0/24 or 103.15.22.0/24)
     if (cleanEntry.includes('/')) {
       const [subnet, bitsStr] = cleanEntry.split('/');
       const bits = parseInt(bitsStr, 10);
-      if (ipInCidr(cleanClient, subnet, bits)) {
+      if (!isNaN(bits) && ipInCidr(cleanClient, subnet, bits)) {
         return true;
       }
     }
@@ -473,14 +469,13 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 
 app.get('/api/initial-data', async (req, res) => {
   try {
-    const isVercel = !!(process.env.VERCEL || process.env.VERCEL_ENV);
     const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {
-      geofence_lat: 8.752625,
-      geofence_lng: 76.938625,
-      geofence_radius_meters: 20000,
-      max_allowed_accuracy_meters: 300,
-      hospital_wifi_ips: '["127.0.0.1", "::1", "103.170.54.239", "103.170.54.0/24", "*"]',
-      network_enforcement_mode: isVercel ? 'audit' : 'audit'
+      geofence_lat: parseFloat(process.env.HOSPITAL_LAT) || 8.752625,
+      geofence_lng: parseFloat(process.env.HOSPITAL_LNG) || 76.938625,
+      geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500,
+      max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300,
+      hospital_wifi_ips: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]',
+      network_enforcement_mode: process.env.NETWORK_ENFORCEMENT_MODE || 'enforce'
     };
 
     const clientIp = getTrustedClientIp(req);
@@ -494,83 +489,25 @@ app.get('/api/initial-data', async (req, res) => {
 });
 
 app.get('/api/my-ip', async (req, res) => {
-  const clientIp = getTrustedClientIp(req);
-  const isVercel = !!(process.env.VERCEL || process.env.VERCEL_ENV);
-  const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
-  let allowedIps = [];
-  try {
-    allowedIps = typeof settings.hospital_wifi_ips === 'string' ? JSON.parse(settings.hospital_wifi_ips) : (settings.hospital_wifi_ips || []);
-  } catch (e) {
-    allowedIps = ['127.0.0.1', '::1', '103.170.54.239', '103.170.54.0/24', '*'];
-  }
-
-  const isApproved = isVercel || isIpApproved(clientIp, allowedIps);
-  res.json({
-    success: true,
-    clientIp,
-    allowedIps,
-    isApproved: true,
-    networkEnforcementMode: process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'audit'
-  });
-});
-
-app.post('/api/hospital/whitelist-ip', requireAuth, async (req, res) => {
   try {
     const clientIp = getTrustedClientIp(req);
-    const current = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
-    let allowedList = [];
+    const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
+    let allowedIps = [];
     try {
-      allowedList = typeof current.hospital_wifi_ips === 'string' ? JSON.parse(current.hospital_wifi_ips) : (current.hospital_wifi_ips || []);
+      allowedIps = typeof settings.hospital_wifi_ips === 'string' ? JSON.parse(settings.hospital_wifi_ips) : (settings.hospital_wifi_ips || []);
     } catch (e) {
-      allowedList = ['127.0.0.1', '::1'];
+      allowedIps = ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
     }
 
-    if (!allowedList.includes(clientIp)) {
-      allowedList.push(clientIp);
-    }
-    if (!allowedList.includes('*')) {
-      allowedList.push('*');
-    }
-
-    const targetId = current.id || 1;
-    await queryRun(
-      `UPDATE system_settings SET hospital_wifi_ips = ?, network_enforcement_mode = 'audit' WHERE id = ?`,
-      [JSON.stringify(allowedList), targetId]
-    );
-
-    await logAuditEvent(req.user.id, req.user.name, 'SETTINGS_UPDATED', 'INFO', 'HOSPITAL_WIFI_WHITELISTED', `Hospital Wi-Fi whitelist expanded with network IP: ${clientIp}`);
+    const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'enforce';
+    const isApproved = isApprovedHospitalNetwork(clientIp, allowedIps);
 
     res.json({
       success: true,
       clientIp,
-      message: `🌐 Network IP ${clientIp} authorized as approved Hospital Wi-Fi network!`
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/hospital/calibrate-location', requireAuth, async (req, res) => {
-  try {
-    const { lat, lng, radiusMeters } = req.body;
-    if (typeof lat !== 'number' || typeof lng !== 'number') {
-      return res.status(400).json({ success: false, error: 'Valid latitude and longitude numbers required.' });
-    }
-
-    const current = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
-    const targetId = current.id || 1;
-    const targetRadius = radiusMeters ? parseFloat(radiusMeters) : 20000;
-
-    await queryRun(
-      `UPDATE system_settings SET geofence_lat = ?, geofence_lng = ?, geofence_radius_meters = ? WHERE id = ?`,
-      [parseFloat(lat), parseFloat(lng), targetRadius, targetId]
-    );
-
-    await logAuditEvent(req.user.id, req.user.name, 'SETTINGS_UPDATED', 'INFO', 'HOSPITAL_LOCATION_CALIBRATED', `Hospital location center updated to lat: ${lat}, lng: ${lng}, radius: ${targetRadius}m`);
-
-    res.json({
-      success: true,
-      message: `🎉 Hospital GPS center calibrated to Lat: ${lat}, Lng: ${lng} (Radius: ${targetRadius}m)!`
+      allowedIps,
+      isApproved,
+      networkEnforcementMode: networkMode
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -616,7 +553,7 @@ app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
         geofence_radius_meters !== undefined ? parseFloat(geofence_radius_meters) : current.geofence_radius_meters,
         max_allowed_accuracy_meters !== undefined ? parseFloat(max_allowed_accuracy_meters) : current.max_allowed_accuracy_meters,
         hospital_wifi_ips !== undefined ? (typeof hospital_wifi_ips === 'string' ? hospital_wifi_ips : JSON.stringify(hospital_wifi_ips)) : current.hospital_wifi_ips,
-        network_enforcement_mode || current.network_enforcement_mode || 'audit',
+        network_enforcement_mode || current.network_enforcement_mode || 'enforce',
         enforcement_strict_geofence !== undefined ? (enforcement_strict_geofence ? 1 : 0) : 1,
         enforcement_strict_accuracy !== undefined ? (enforcement_strict_accuracy ? 1 : 0) : 1,
         enforcement_strict_shift !== undefined ? (enforcement_strict_shift ? 1 : 0) : 1,
@@ -1004,7 +941,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
         });
       }
 
-      if (process.env.NODE_ENV === 'test' || credential.response.clientDataJSON === 'xyz') {
+      if (process.env.NODE_ENV === 'test') {
         webauthnVerified = true;
         credentialIdRef = storedCredential.credential_id;
       } else {
@@ -1082,15 +1019,14 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     try {
       allowedIps = typeof settings.hospital_wifi_ips === 'string' ? JSON.parse(settings.hospital_wifi_ips) : settings.hospital_wifi_ips;
     } catch (e) {
-      allowedIps = ['127.0.0.1', '::1', '103.170.54.239', '103.170.54.0/24', '*'];
+      allowedIps = ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
     }
     if ((!allowedIps || allowedIps.length === 0) && process.env.HOSPITAL_ALLOWED_PUBLIC_IPS) {
       allowedIps = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim());
     }
 
-    const isVercel = !!(process.env.VERCEL || process.env.VERCEL_ENV);
-    const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || (isVercel ? 'audit' : 'audit');
-    const isNetworkApproved = isVercel || isIpApproved(clientIp, allowedIps);
+    const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'enforce';
+    const isNetworkApproved = isApprovedHospitalNetwork(clientIp, allowedIps);
 
     if (networkMode === 'enforce' && !isNetworkApproved) {
       await recordAttendanceAttempt({
@@ -1149,10 +1085,10 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       });
     }
 
-    const hospitalLat = parseFloat(settings.geofence_lat) || parseFloat(process.env.HOSPITAL_LAT) || 8.752625;
-    const hospitalLng = parseFloat(settings.geofence_lng) || parseFloat(process.env.HOSPITAL_LNG) || 76.938625;
-    const geofenceRadiusMeters = parseFloat(settings.geofence_radius_meters) || parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 20000;
-    const maxAccuracyMeters = parseFloat(settings.max_allowed_accuracy_meters) || parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300;
+    const hospitalLat = parseFloat(process.env.HOSPITAL_LAT) || parseFloat(settings.geofence_lat) || 8.752625;
+    const hospitalLng = parseFloat(process.env.HOSPITAL_LNG) || parseFloat(settings.geofence_lng) || 76.938625;
+    const geofenceRadiusMeters = parseFloat(process.env.GEOFENCE_RADIUS_METERS) || parseFloat(settings.geofence_radius_meters) || 500;
+    const maxAccuracyMeters = parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || parseFloat(settings.max_allowed_accuracy_meters) || 300;
 
     distanceMeters = calculateHaversineDistance(lat, lng, hospitalLat, hospitalLng);
 

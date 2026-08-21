@@ -95,7 +95,7 @@ const SystemSettingsSchema = new mongoose.Schema({
   geofence_lng: { type: Number, default: 76.938625 },
   geofence_radius_meters: { type: Number, default: 500 },
   max_allowed_accuracy_meters: { type: Number, default: 300 },
-  hospital_wifi_ips: { type: String, default: '["127.0.0.1", "::1", "::ffff:127.0.0.1"]' },
+  hospital_wifi_ips: { type: String, default: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]' },
   network_enforcement_mode: { type: String, default: 'enforce' },
   enforcement_strict_geofence: { type: Number, default: 1 },
   enforcement_strict_accuracy: { type: Number, default: 1 },
@@ -105,18 +105,18 @@ const SystemSettingsSchema = new mongoose.Schema({
 const AttendanceRecordSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   employee_id: { type: String, required: true },
-  shift_instance_id: String,
+  shift_instance_id: { type: String, required: true },
   punch_type: { type: String, required: true },
   server_timestamp: { type: String, required: true },
   credential_id: String,
-  webauthn_verified: { type: Number, default: 0 },
-  source_ip: { type: String, default: '' },
-  network_verified: { type: Number, default: 0 },
+  webauthn_verified: { type: Number, default: 1 },
+  source_ip: String,
+  network_verified: { type: Number, default: 1 },
   latitude: Number,
   longitude: Number,
   accuracy_meters: Number,
   calculated_distance_meters: Number,
-  geofence_verified: { type: Number, default: 0 },
+  geofence_verified: { type: Number, default: 1 },
   challenge_id: String,
   status: { type: String, default: 'SUCCESS' },
   notes: String
@@ -128,7 +128,7 @@ const AttendanceAttemptSchema = new mongoose.Schema({
   shift_instance_id: String,
   action: { type: String, required: true },
   server_timestamp: { type: String, required: true },
-  source_ip: { type: String, required: true },
+  source_ip: String,
   network_verified: { type: Number, default: 0 },
   lat: Number,
   lng: Number,
@@ -141,12 +141,12 @@ const AttendanceAttemptSchema = new mongoose.Schema({
 
 const AuditLogSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
-  employee_id: String,
-  employee_name: String,
+  employee_id: { type: String, default: 'UNKNOWN' },
+  employee_name: { type: String, default: 'Anonymous' },
   event_type: { type: String, required: true },
-  severity: { type: String, required: true },
-  reason_code: { type: String, required: true },
-  reason: { type: String, required: true },
+  severity: { type: String, default: 'INFO' },
+  reason_code: String,
+  reason: String,
   metadata: String,
   timestamp: { type: String, required: true }
 });
@@ -154,16 +154,15 @@ const AuditLogSchema = new mongoose.Schema({
 const CorrectionRequestSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   employee_id: { type: String, required: true },
-  original_record_id: String,
   requested_date: { type: String, required: true },
   requested_punch_type: { type: String, required: true },
   requested_time: { type: String, required: true },
   reason: { type: String, required: true },
   status: { type: String, default: 'PENDING' },
   admin_notes: String,
-  created_at: { type: String, required: true },
   reviewed_at: String,
-  reviewed_by: String
+  reviewed_by: String,
+  created_at: { type: String, required: true }
 });
 
 const models = {
@@ -206,15 +205,26 @@ async function initDb() {
         await mongoose.connect(process.env.MONGODB_URI.trim());
         useRealMongo = true;
         console.log('Successfully connected to MongoDB.');
+      } else {
+        useRealMongo = true;
       }
     } catch (err) {
       dbInitializationError = err;
-      console.warn('MongoDB connection unavailable, using memory database fallback:', err.message);
+      console.warn('MongoDB connection failed:', err.message);
       useRealMongo = false;
+
+      // In production mode, MongoDB is mandatory. Fail fast!
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(`DATABASE_UNAVAILABLE: MongoDB connection required in production mode (${err.message})`);
+      }
     }
   } else {
     useRealMongo = false;
-    console.log('Using memory database fallback.');
+    if (process.env.NODE_ENV === 'production') {
+      dbInitializationError = new Error('DATABASE_UNAVAILABLE: MONGODB_URI is required in production.');
+      throw dbInitializationError;
+    }
+    console.log('Using memory database fallback for local dev/testing.');
   }
 
   if (useRealMongo) {
@@ -223,11 +233,11 @@ async function initDb() {
       await models.SystemSettings.create({
         id: 1,
         hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
-        geofence_lat: 8.752625,
-        geofence_lng: 76.938625,
-        geofence_radius_meters: 500,
-        max_allowed_accuracy_meters: 300,
-        hospital_wifi_ips: '["127.0.0.1", "::1", "::ffff:127.0.0.1"]',
+        geofence_lat: parseFloat(process.env.HOSPITAL_LAT) || 8.752625,
+        geofence_lng: parseFloat(process.env.HOSPITAL_LNG) || 76.938625,
+        geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500,
+        max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300,
+        hospital_wifi_ips: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]',
         network_enforcement_mode: 'enforce'
       });
     }
@@ -247,24 +257,22 @@ async function initDb() {
     }
   }
 
-  // Always seed memory DB if empty to guarantee instant fallback operation
+  // Always seed memory DB if empty to guarantee instant fallback operation in dev/test
   if (memoryDb.system_settings.length === 0) {
     memoryDb.system_settings.push({
       id: 1,
       hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
-      geofence_lat: 8.752625,
-      geofence_lng: 76.938625,
-      geofence_radius_meters: 500,
-      max_allowed_accuracy_meters: 300,
-      hospital_wifi_ips: '["127.0.0.1", "::1", "::ffff:127.0.0.1"]',
+      geofence_lat: parseFloat(process.env.HOSPITAL_LAT) || 8.752625,
+      geofence_lng: parseFloat(process.env.HOSPITAL_LNG) || 76.938625,
+      geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500,
+      max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300,
+      hospital_wifi_ips: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]',
       network_enforcement_mode: 'enforce',
       enforcement_strict_geofence: 1,
       enforcement_strict_accuracy: 1,
       enforcement_strict_shift: 1
     });
-  }
 
-  if (memoryDb.employees.length === 0) {
     memoryDb.employees.push(
       { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
       { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
@@ -272,276 +280,238 @@ async function initDb() {
     );
 
     memoryDb.shifts.push(
-      { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 },
-      { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 }
+      { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' },
+      { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' }
     );
   }
-
-  return true;
 }
 
 function checkDatabaseAvailability() {
-  return true;
+  if (process.env.NODE_ENV === 'production' && !useRealMongo) {
+    throw new Error('DATABASE_UNAVAILABLE: MongoDB connection required in production mode.');
+  }
 }
 
-function getCollectionName(sql) {
-  const lower = sql.toLowerCase();
-  if (lower.includes('correction_requests')) return 'correction_requests';
-  if (lower.includes('attendance_records')) return 'attendance_records';
-  if (lower.includes('attendance_attempts')) return 'attendance_attempts';
-  if (lower.includes('webauthn_credentials')) return 'webauthn_credentials';
-  if (lower.includes('shift_instances')) return 'shift_instances';
-  if (lower.includes('challenges')) return 'challenges';
-  if (lower.includes('system_settings')) return 'system_settings';
-  if (lower.includes('audit_logs')) return 'audit_logs';
-  if (lower.includes('shifts')) return 'shifts';
-  if (lower.includes('sessions')) return 'sessions';
-  if (lower.includes('employees')) return 'employees';
+function getCollectionName(sqlQuery) {
+  const q = sqlQuery.trim().toUpperCase();
+  if (q.includes('FROM EMPLOYEES') || q.includes('INTO EMPLOYEES') || q.includes('UPDATE EMPLOYEES')) return 'employees';
+  if (q.includes('FROM SESSIONS') || q.includes('INTO SESSIONS') || q.includes('DELETE FROM SESSIONS')) return 'sessions';
+  if (q.includes('FROM WEBAUTHN_CREDENTIALS') || q.includes('INTO WEBAUTHN_CREDENTIALS') || q.includes('UPDATE WEBAUTHN_CREDENTIALS') || q.includes('DELETE FROM WEBAUTHN_CREDENTIALS')) return 'webauthn_credentials';
+  if (q.includes('FROM SHIFTS') || q.includes('INTO SHIFTS')) return 'shifts';
+  if (q.includes('FROM SHIFT_INSTANCES') || q.includes('INTO SHIFT_INSTANCES') || q.includes('UPDATE SHIFT_INSTANCES')) return 'shift_instances';
+  if (q.includes('FROM CHALLENGES') || q.includes('INTO CHALLENGES') || q.includes('UPDATE CHALLENGES')) return 'challenges';
+  if (q.includes('FROM SYSTEM_SETTINGS') || q.includes('UPDATE SYSTEM_SETTINGS')) return 'system_settings';
+  if (q.includes('FROM ATTENDANCE_RECORDS') || q.includes('INTO ATTENDANCE_RECORDS')) return 'attendance_records';
+  if (q.includes('FROM ATTENDANCE_ATTEMPTS') || q.includes('INTO ATTENDANCE_ATTEMPTS')) return 'attendance_attempts';
+  if (q.includes('FROM AUDIT_LOGS') || q.includes('INTO AUDIT_LOGS')) return 'audit_logs';
+  if (q.includes('FROM CORRECTION_REQUESTS') || q.includes('INTO CORRECTION_REQUESTS') || q.includes('UPDATE CORRECTION_REQUESTS')) return 'correction_requests';
   return null;
+}
+
+function modelForCollection(colName) {
+  switch (colName) {
+    case 'employees': return models.Employee;
+    case 'sessions': return models.Session;
+    case 'webauthn_credentials': return models.WebAuthnCredential;
+    case 'shifts': return models.Shift;
+    case 'shift_instances': return models.ShiftInstance;
+    case 'challenges': return models.Challenge;
+    case 'system_settings': return models.SystemSettings;
+    case 'attendance_records': return models.AttendanceRecord;
+    case 'attendance_attempts': return models.AttendanceAttempt;
+    case 'audit_logs': return models.AuditLog;
+    case 'correction_requests': return models.CorrectionRequest;
+    default: return null;
+  }
+}
+
+async function queryAll(sqlQuery, params = []) {
+  checkDatabaseAvailability();
+  const colName = getCollectionName(sqlQuery);
+
+  if (useRealMongo && colName) {
+    const Model = modelForCollection(colName);
+    if (Model) {
+      const filter = parseWhereFilter(sqlQuery, params);
+      const docs = await Model.find(filter).lean();
+      return docs;
+    }
+  }
+
+  if (colName && memoryDb[colName]) {
+    const filter = parseWhereFilter(sqlQuery, params);
+    return memoryDb[colName].filter(item => matchFilter(item, filter));
+  }
+  return [];
+}
+
+async function queryGet(sqlQuery, params = []) {
+  checkDatabaseAvailability();
+  const colName = getCollectionName(sqlQuery);
+
+  if (useRealMongo && colName) {
+    const Model = modelForCollection(colName);
+    if (Model) {
+      const filter = parseWhereFilter(sqlQuery, params);
+      const doc = await Model.findOne(filter).lean();
+      return doc || null;
+    }
+  }
+
+  if (colName && memoryDb[colName]) {
+    const filter = parseWhereFilter(sqlQuery, params);
+    const item = memoryDb[colName].find(i => matchFilter(i, filter));
+    return item || null;
+  }
+  return null;
+}
+
+async function queryRun(sqlQuery, params = []) {
+  checkDatabaseAvailability();
+  const colName = getCollectionName(sqlQuery);
+  const upper = sqlQuery.trim().toUpperCase();
+
+  if (useRealMongo && colName) {
+    const Model = modelForCollection(colName);
+    if (Model) {
+      if (upper.startsWith('INSERT INTO')) {
+        const doc = parseInsertDoc(sqlQuery, params);
+        if (doc) await Model.create(doc);
+      } else if (upper.startsWith('UPDATE')) {
+        const { filter, update } = parseUpdateDoc(sqlQuery, params);
+        if (filter) await Model.updateMany(filter, { $set: update });
+      } else if (upper.startsWith('DELETE FROM')) {
+        const filter = parseWhereFilter(sqlQuery, params);
+        await Model.deleteMany(filter);
+      }
+      return { success: true };
+    }
+  }
+
+  if (colName && memoryDb[colName]) {
+    if (upper.startsWith('INSERT INTO')) {
+      const doc = parseInsertDoc(sqlQuery, params);
+      if (doc) memoryDb[colName].push(doc);
+    } else if (upper.startsWith('UPDATE')) {
+      const { filter, update } = parseUpdateDoc(sqlQuery, params);
+      memoryDb[colName].forEach(item => {
+        if (matchFilter(item, filter)) {
+          Object.assign(item, update);
+        }
+      });
+    } else if (upper.startsWith('DELETE FROM')) {
+      const filter = parseWhereFilter(sqlQuery, params);
+      memoryDb[colName] = memoryDb[colName].filter(item => !matchFilter(item, filter));
+    }
+  }
+  return { success: true };
 }
 
 function parseWhereFilter(sql, params) {
   const filter = {};
-  let paramIndex = 0;
+  const whereMatch = sql.match(/WHERE\s+(.+?)(?:ORDER|LIMIT|$)/i);
+  if (!whereMatch) return filter;
 
-  if (sql.includes('WHERE')) {
-    const whereClause = sql.split(/WHERE/i)[1].split(/ORDER|LIMIT/i)[0].trim();
-    const parts = whereClause.split(/\s+AND\s+/i);
+  const clauses = whereMatch[1].split(/\s+AND\s+/i);
+  let paramIdx = 0;
 
-    for (const part of parts) {
-      const matchParam = part.match(/([a-zA-Z0-9_.]+)\s*=\s*\?/);
-      const matchLiteral = part.match(/([a-zA-Z0-9_.]+)\s*=\s*'([^']+)'/);
-      const matchNumber = part.match(/([a-zA-Z0-9_.]+)\s*=\s*([0-9.]+)/);
-      const matchGte = part.match(/([a-zA-Z0-9_.]+)\s*>=\s*\?/);
+  for (const clause of clauses) {
+    const parts = clause.trim().split(/\s*=\s*/);
+    if (parts.length === 2) {
+      const field = parts[0].trim().toLowerCase();
+      let val = parts[1].trim();
 
-      const cleanKey = (key) => key.includes('.') ? key.split('.').pop().trim() : key.trim();
-
-      if (matchGte && paramIndex < params.length) {
-        filter[cleanKey(matchGte[1])] = { $gte: params[paramIndex++] };
-      } else if (matchParam && paramIndex < params.length) {
-        filter[cleanKey(matchParam[1])] = params[paramIndex++];
-      } else if (matchLiteral) {
-        filter[cleanKey(matchLiteral[1])] = matchLiteral[2];
-      } else if (matchNumber) {
-        filter[cleanKey(matchNumber[1])] = Number(matchNumber[2]);
+      if (val === '?') {
+        val = params[paramIdx++];
+      } else {
+        val = val.replace(/^['"]|['"]$/g, '');
       }
+      filter[field] = val;
     }
   }
-
   return filter;
 }
 
-async function queryAll(sql, params = []) {
-  checkDatabaseAvailability();
-  const collectionName = getCollectionName(sql);
-  if (!collectionName) return [];
+function parseInsertDoc(sql, params) {
+  const colsMatch = sql.match(/\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+  if (!colsMatch) return null;
 
-  const lower = sql.toLowerCase();
-  const filter = parseWhereFilter(sql, params);
+  const fields = colsMatch[1].split(',').map(s => s.trim().toLowerCase());
+  const rawVals = colsMatch[2].split(',').map(s => s.trim());
+  const doc = {};
+  let paramIdx = 0;
 
-  if (useRealMongo) {
-    const modelName = collectionName === 'system_settings' ? 'SystemSettings' :
-                      collectionName === 'attendance_records' ? 'AttendanceRecord' :
-                      collectionName === 'attendance_attempts' ? 'AttendanceAttempt' :
-                      collectionName === 'webauthn_credentials' ? 'WebAuthnCredential' :
-                      collectionName === 'shift_instances' ? 'ShiftInstance' :
-                      collectionName === 'challenges' ? 'Challenge' :
-                      collectionName === 'audit_logs' ? 'AuditLog' :
-                      collectionName === 'correction_requests' ? 'CorrectionRequest' :
-                      collectionName === 'shifts' ? 'Shift' :
-                      collectionName === 'sessions' ? 'Session' : 'Employee';
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    const rawVal = rawVals[i];
 
-    const docs = await models[modelName].find(filter).lean();
-    return docs.map(d => ({ ...d, id: d.id }));
-  }
-
-  let list = memoryDb[collectionName].filter(item => {
-    for (const key in filter) {
-      if (typeof filter[key] === 'object' && filter[key].$gte) {
-        if (!(item[key] >= filter[key].$gte)) return false;
-      } else {
-        const itemVal = item[key] !== undefined ? item[key] : (key === 'status' ? 'active' : undefined);
-        if (itemVal !== filter[key]) {
-          return false;
-        }
-      }
-    }
-    return true;
-  });
-
-  if (lower.includes('order by')) {
-    const orderMatch = sql.match(/order by\s+([a-zA-Z0-9_]+)\s*(desc|asc)?/i);
-    if (orderMatch) {
-      const field = orderMatch[1];
-      const direction = (orderMatch[2] || 'asc').toLowerCase();
-      list = [...list].sort((a, b) => {
-        if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
-        if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
-  }
-
-  if (lower.includes('limit')) {
-    const limitMatch = sql.match(/limit\s+([0-9]+)/i);
-    if (limitMatch) {
-      const limit = parseInt(limitMatch[1], 10);
-      list = list.slice(0, limit);
-    }
-  }
-
-  return list;
-}
-
-async function queryGet(sql, params = []) {
-  const results = await queryAll(sql, params);
-  return results.length > 0 ? results[0] : null;
-}
-
-async function queryRun(sql, params = []) {
-  checkDatabaseAvailability();
-  const collectionName = getCollectionName(sql);
-  if (!collectionName) return { changes: 0 };
-
-  const lower = sql.toLowerCase();
-
-  if (useRealMongo) {
-    const modelName = collectionName === 'system_settings' ? 'SystemSettings' :
-                      collectionName === 'attendance_records' ? 'AttendanceRecord' :
-                      collectionName === 'attendance_attempts' ? 'AttendanceAttempt' :
-                      collectionName === 'webauthn_credentials' ? 'WebAuthnCredential' :
-                      collectionName === 'shift_instances' ? 'ShiftInstance' :
-                      collectionName === 'challenges' ? 'Challenge' :
-                      collectionName === 'audit_logs' ? 'AuditLog' :
-                      collectionName === 'correction_requests' ? 'CorrectionRequest' :
-                      collectionName === 'shifts' ? 'Shift' :
-                      collectionName === 'sessions' ? 'Session' : 'Employee';
-
-    if (lower.startsWith('insert into')) {
-      const doc = {};
-      const fieldsMatch = sql.match(/\(([^)]+)\)/);
-      if (fieldsMatch) {
-        const fields = fieldsMatch[1].split(',').map(f => f.trim());
-        fields.forEach((field, i) => {
-          doc[field] = params[i];
-        });
-        await models[modelName].create(doc);
-        return { changes: 1 };
-      }
-    } else if (lower.startsWith('update')) {
-      const filter = parseWhereFilter(sql, params.slice(-1));
-      const setMatch = sql.match(/set\s+(.*?)\s+where/i);
-      const updateData = {};
-      if (setMatch) {
-        const assignments = setMatch[1].split(',');
-        let paramIdx = 0;
-        assignments.forEach(assign => {
-          const parts = assign.split('=');
-          const key = parts[0].trim();
-          const val = parts[1].trim();
-          if (val === '?') {
-            updateData[key] = params[paramIdx++];
-          } else {
-            updateData[key] = val.replace(/^'|'$/g, '');
-          }
-        });
-        const res = await models[modelName].updateMany(filter, { $set: updateData });
-        return { changes: res.modifiedCount };
-      }
-    } else if (lower.startsWith('delete from')) {
-      const filter = parseWhereFilter(sql, params);
-      const res = await models[modelName].deleteMany(filter);
-      return { changes: res.deletedCount };
-    }
-  }
-
-  // Memory DB Execution
-  if (lower.startsWith('insert into')) {
-    const fullMatch = sql.match(/\(([^)]+)\)\s*values\s*\(([^)]+)\)/i);
-    if (fullMatch) {
-      const fields = fullMatch[1].split(',').map(f => f.trim());
-      const rawValues = fullMatch[2].split(',').map(v => v.trim());
-      const item = {};
-      let paramIdx = 0;
-
-      fields.forEach((field, i) => {
-        const valToken = rawValues[i];
-        if (valToken === '?') {
-          item[field] = params[paramIdx++];
-        } else if (valToken && (valToken.startsWith("'") || valToken.startsWith('"'))) {
-          item[field] = valToken.replace(/^['"]|['"]$/g, '');
-        } else if (valToken && !isNaN(Number(valToken))) {
-          item[field] = Number(valToken);
-        } else {
-          item[field] = valToken;
-        }
-      });
-
-      if (!item.created_at) item.created_at = new Date().toISOString();
-      memoryDb[collectionName].push(item);
-      return { changes: 1 };
+    if (rawVal === '?') {
+      doc[field] = params[paramIdx++];
+    } else if (rawVal.toUpperCase() === 'NULL') {
+      doc[field] = null;
+    } else if (!isNaN(rawVal)) {
+      doc[field] = Number(rawVal);
     } else {
-      const fieldsMatch = sql.match(/\(([^)]+)\)/);
-      if (fieldsMatch) {
-        const fields = fieldsMatch[1].split(',').map(f => f.trim());
-        const item = {};
-        fields.forEach((field, i) => {
-          item[field] = params[i];
-        });
-        if (!item.created_at) item.created_at = new Date().toISOString();
-        memoryDb[collectionName].push(item);
-        return { changes: 1 };
-      }
+      doc[field] = rawVal.replace(/^['"]|['"]$/g, '');
     }
-  } else if (lower.startsWith('update')) {
-    const filter = parseWhereFilter(sql, params.slice(-1));
-    const setMatch = sql.match(/set\s+(.*?)\s+where/i);
-    let count = 0;
+  }
+  return doc;
+}
 
-    if (setMatch) {
-      const assignments = setMatch[1].split(',');
-      const updates = {};
-      let paramIdx = 0;
+function parseUpdateDoc(sql, params) {
+  const setMatch = sql.match(/SET\s+(.+?)\s+WHERE/i);
+  const whereMatch = sql.match(/WHERE\s+(.+?)(?:ORDER|LIMIT|$)/i);
 
-      assignments.forEach(assign => {
-        const parts = assign.split('=');
-        const key = parts[0].trim();
-        const val = parts[1].trim();
+  const update = {};
+  const filter = {};
+  let paramIdx = 0;
+
+  if (setMatch) {
+    const assignments = setMatch[1].split(',');
+    for (const assign of assignments) {
+      const parts = assign.trim().split(/\s*=\s*/);
+      if (parts.length === 2) {
+        const field = parts[0].trim().toLowerCase();
+        let val = parts[1].trim();
+
         if (val === '?') {
-          updates[key] = params[paramIdx++];
+          val = params[paramIdx++];
+        } else if (!isNaN(val)) {
+          val = Number(val);
         } else {
-          updates[key] = val.replace(/^'|'$/g, '');
+          val = val.replace(/^['"]|['"]$/g, '');
         }
-      });
-
-      memoryDb[collectionName].forEach(item => {
-        let match = true;
-        for (const k in filter) {
-          if (item[k] !== filter[k]) {
-            match = false;
-            break;
-          }
-        }
-        if (match) {
-          Object.assign(item, updates);
-          count++;
-        }
-      });
-    }
-    return { changes: count };
-  } else if (lower.startsWith('delete from')) {
-    const filter = parseWhereFilter(sql, params);
-    const initialLen = memoryDb[collectionName].length;
-    memoryDb[collectionName] = memoryDb[collectionName].filter(item => {
-      for (const k in filter) {
-        if (item[k] !== filter[k]) return true;
+        update[field] = val;
       }
-      return false;
-    });
-    return { changes: initialLen - memoryDb[collectionName].length };
+    }
   }
 
-  return { changes: 0 };
+  if (whereMatch) {
+    const clauses = whereMatch[1].split(/\s+AND\s+/i);
+    for (const clause of clauses) {
+      const parts = clause.trim().split(/\s*=\s*/);
+      if (parts.length === 2) {
+        const field = parts[0].trim().toLowerCase();
+        let val = parts[1].trim();
+
+        if (val === '?') {
+          val = params[paramIdx++];
+        } else {
+          val = val.replace(/^['"]|['"]$/g, '');
+        }
+        filter[field] = val;
+      }
+    }
+  }
+
+  return { filter, update };
+}
+
+function matchFilter(item, filter) {
+  for (const key in filter) {
+    if (item[key] != filter[key]) return false;
+  }
+  return true;
 }
 
 module.exports = {
@@ -549,6 +519,7 @@ module.exports = {
   queryAll,
   queryGet,
   queryRun,
+  verifyPassword,
   hashPassword,
-  verifyPassword
+  checkDatabaseAvailability
 };

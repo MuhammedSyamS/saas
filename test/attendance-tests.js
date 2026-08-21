@@ -48,6 +48,7 @@ function makeRequest(path, method = 'GET', body = null, extraHeaders = {}) {
 }
 
 async function runEnterpriseTestSuite() {
+  process.env.NODE_ENV = 'test';
   console.log('🧪 Starting Enterprise-Grade Hospital Attendance Validation Test Suite...\n');
 
   await initDb();
@@ -255,8 +256,8 @@ async function runEnterpriseTestSuite() {
       geofence_lng: 76.938625,
       geofence_radius_meters: 500,
       max_allowed_accuracy_meters: 300,
-      hospital_wifi_ips: '["127.0.0.1", "::1"]',
-      network_enforcement_mode: 'observe'
+      hospital_wifi_ips: '["127.0.0.1", "::1", "103.170.54.239"]',
+      network_enforcement_mode: 'enforce'
     });
   });
 
@@ -271,6 +272,7 @@ async function runEnterpriseTestSuite() {
 
   // 15. Server Timestamp Generation Verification
   await testCase('15. Official server timestamp verification (Client time ignored)', async () => {
+    await queryRun('DELETE FROM shift_instances WHERE employee_id = \'emp_1\'');
     await makeRequest('/api/auth/login', 'POST', { email: 'rahul.sharma@vaidhyar.org', password: 'Password123!' });
     const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
     const fakeClientTime = '1999-12-31T23:59:59.000Z';
@@ -281,8 +283,9 @@ async function runEnterpriseTestSuite() {
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } },
       clientTimestamp: fakeClientTime
-    });
+    }, { 'x-forwarded-for': '127.0.0.1' });
 
+    if (!res.body.success) throw new Error(`Server timestamp test punch failed: ${res.body.error}`);
     if (res.body.serverTimestamp && res.body.serverTimestamp.startsWith('1999')) {
       throw new Error('Server trusted client timestamp instead of authoritative server time!');
     }
@@ -297,7 +300,8 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '127.0.0.1' });
+
     if (res.body.reasonCode !== 'DUPLICATE_CHECK_IN') {
       throw new Error(`Expected DUPLICATE_CHECK_IN but got ${res.body.reasonCode}`);
     }
@@ -312,7 +316,8 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '127.0.0.1' });
+
     if (res.status !== 200 || !res.body.success) {
       throw new Error(res.body.error || 'Valid Punch Out failed');
     }
@@ -327,7 +332,8 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '127.0.0.1' });
+
     if (res.body.reasonCode !== 'SHIFT_ALREADY_COMPLETED') {
       throw new Error(`Expected SHIFT_ALREADY_COMPLETED but got ${res.body.reasonCode}`);
     }
