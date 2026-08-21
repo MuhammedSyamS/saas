@@ -34,16 +34,20 @@ function base64UrlToBuffer(base64url) {
 // Dual-Engine WebAuthn Registration (SimpleWebAuthn + Native Fallback)
 async function webAuthnRegister(optionsJSON) {
   // 1. Try SimpleWebAuthnBrowser v10+ and v9
-  if (window.SimpleWebAuthnBrowser) {
+  if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
     try {
-      if (typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
-        return await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
-      }
+      return await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
     } catch (e1) {
+      if (e1.name === 'NotAllowedError' || e1.name === 'InvalidStateError' || e1.name === 'NotSupportedError') {
+        throw e1;
+      }
       try {
         return await window.SimpleWebAuthnBrowser.startRegistration(optionsJSON);
       } catch (e2) {
-        console.warn('[WebAuthn] SimpleWebAuthnBrowser registration failed, switching to native WebAuthn:', e2);
+        if (e2.name === 'NotAllowedError' || e2.name === 'InvalidStateError' || e2.name === 'NotSupportedError') {
+          throw e2;
+        }
+        console.warn('[WebAuthn] SDK startRegistration failed, switching to native WebAuthn:', e2);
       }
     }
   }
@@ -86,16 +90,20 @@ async function webAuthnRegister(optionsJSON) {
 // Dual-Engine WebAuthn Authentication (SimpleWebAuthn + Native Fallback)
 async function webAuthnAuthenticate(optionsJSON) {
   // 1. Try SimpleWebAuthnBrowser v10+ and v9
-  if (window.SimpleWebAuthnBrowser) {
+  if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startAuthentication === 'function') {
     try {
-      if (typeof window.SimpleWebAuthnBrowser.startAuthentication === 'function') {
-        return await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON });
-      }
+      return await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON });
     } catch (e1) {
+      if (e1.name === 'NotAllowedError' || e1.name === 'InvalidStateError' || e1.name === 'NotSupportedError') {
+        throw e1;
+      }
       try {
         return await window.SimpleWebAuthnBrowser.startAuthentication(optionsJSON);
       } catch (e2) {
-        console.warn('[WebAuthn] SimpleWebAuthnBrowser authentication failed, switching to native WebAuthn:', e2);
+        if (e2.name === 'NotAllowedError' || e2.name === 'InvalidStateError' || e2.name === 'NotSupportedError') {
+          throw e2;
+        }
+        console.warn('[WebAuthn] SDK startAuthentication failed, switching to native WebAuthn:', e2);
       }
     }
   }
