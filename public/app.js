@@ -31,6 +31,22 @@ function base64UrlToBuffer(base64url) {
   return bytes.buffer;
 }
 
+// Authorize Current Network IP Address in Hospital Wi-Fi Whitelist
+async function whitelistCurrentIp() {
+  try {
+    showAlert('Authorizing your current network IP address...', 'info');
+    const { data } = await safeFetchJson('/api/hospital/whitelist-ip', { method: 'POST' });
+    if (data.success) {
+      showAlert(data.message, 'success');
+      await fetchInitialData();
+    } else {
+      showAlert('Authorization error: ' + (data.error || 'Failed to authorize IP'), 'error');
+    }
+  } catch (err) {
+    showAlert('Authorization error: ' + err.message, 'error');
+  }
+}
+
 // Calibrate Hospital Location Center to Staff/Admin's Live GPS
 async function calibrateHospitalLocation() {
   try {

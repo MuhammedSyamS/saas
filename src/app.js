@@ -73,6 +73,11 @@ function isIpApproved(clientIp, allowedIpsInput) {
     }
   }
 
+  // Include default hospital IPs if allowedList is empty
+  if (allowedList.length === 0) {
+    allowedList = ['127.0.0.1', '::1', '103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5'];
+  }
+
   const cleanClient = clientIp.replace(/^::ffff:/, '');
 
   for (const entry of allowedList) {
@@ -82,7 +87,7 @@ function isIpApproved(clientIp, allowedIpsInput) {
     if (cleanEntry === '*' || cleanEntry === '0.0.0.0/0') return true;
     if (cleanClient === cleanEntry) return true;
 
-    // Check CIDR block (e.g. 103.15.22.0/24)
+    // Check CIDR block (e.g. 103.170.54.0/24 or 103.15.22.0/24)
     if (cleanEntry.includes('/')) {
       const [subnet, bitsStr] = cleanEntry.split('/');
       const bits = parseInt(bitsStr, 10);
@@ -464,6 +469,7 @@ app.get('/api/initial-data', async (req, res) => {
       geofence_lng: 76.938625,
       geofence_radius_meters: 20000,
       max_allowed_accuracy_meters: 300,
+      hospital_wifi_ips: '["127.0.0.1", "::1", "103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5"]',
       network_enforcement_mode: 'enforce'
     };
 
@@ -479,7 +485,9 @@ app.get('/api/initial-data', async (req, res) => {
 
 app.get('/api/my-ip', (req, res) => {
   const clientIp = getTrustedClientIp(req);
-  const allowedIps = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS ? process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim()) : ['103.15.22.4', '103.15.22.5'];
+  const allowedIps = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS
+    ? process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim())
+    : ['127.0.0.1', '::1', '103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5'];
   const isApproved = isIpApproved(clientIp, allowedIps);
   res.json({
     success: true,
@@ -488,6 +496,45 @@ app.get('/api/my-ip', (req, res) => {
     isApproved,
     networkEnforcementMode: process.env.NETWORK_ENFORCEMENT_MODE || 'enforce'
   });
+});
+
+app.post('/api/hospital/whitelist-ip', requireAuth, async (req, res) => {
+  try {
+    const clientIp = getTrustedClientIp(req);
+    const current = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
+    let allowedList = [];
+    try {
+      allowedList = typeof current.hospital_wifi_ips === 'string' ? JSON.parse(current.hospital_wifi_ips) : (current.hospital_wifi_ips || []);
+    } catch (e) {
+      allowedList = ['127.0.0.1', '::1'];
+    }
+
+    if (!allowedList.includes(clientIp)) {
+      allowedList.push(clientIp);
+    }
+    // Also include subnet /24 for mobile network shifts
+    const parts = clientIp.split('.');
+    if (parts.length === 4) {
+      const subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+      if (!allowedList.includes(subnet)) allowedList.push(subnet);
+    }
+
+    const targetId = current.id || 1;
+    await queryRun(
+      `UPDATE system_settings SET hospital_wifi_ips = ? WHERE id = ?`,
+      [JSON.stringify(allowedList), targetId]
+    );
+
+    await logAuditEvent(req.user.id, req.user.name, 'SETTINGS_UPDATED', 'INFO', 'HOSPITAL_WIFI_WHITELISTED', `Hospital Wi-Fi whitelist expanded with network IP: ${clientIp}`);
+
+    res.json({
+      success: true,
+      clientIp,
+      message: `🌐 Network IP ${clientIp} authorized as approved Hospital Wi-Fi network!`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.post('/api/hospital/calibrate-location', requireAuth, async (req, res) => {
@@ -1022,7 +1069,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     try {
       allowedIps = typeof settings.hospital_wifi_ips === 'string' ? JSON.parse(settings.hospital_wifi_ips) : settings.hospital_wifi_ips;
     } catch (e) {
-      allowedIps = ['127.0.0.1', '::1'];
+      allowedIps = ['127.0.0.1', '::1', '103.170.54.239', '103.170.54.0/24'];
     }
     if ((!allowedIps || allowedIps.length === 0) && process.env.HOSPITAL_ALLOWED_PUBLIC_IPS) {
       allowedIps = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim());
