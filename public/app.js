@@ -33,6 +33,10 @@ function base64UrlToBuffer(base64url) {
 
 // Dual-Engine WebAuthn Registration (SimpleWebAuthn + Native Fallback)
 async function webAuthnRegister(optionsJSON) {
+  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    throw new Error('WebAuthn Biometrics require opening http://localhost:3000 in your browser.');
+  }
+
   // 1. Try SimpleWebAuthnBrowser v10+ and v9
   if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
     try {
@@ -54,7 +58,7 @@ async function webAuthnRegister(optionsJSON) {
 
   // 2. Native W3C WebAuthn API Fallback (navigator.credentials.create)
   if (!navigator.credentials || !navigator.credentials.create) {
-    throw new Error('Biometric passkeys are not supported on this device/browser.');
+    throw new Error('Biometric passkeys are not supported on this device/browser context.');
   }
 
   const publicKey = {
@@ -89,6 +93,10 @@ async function webAuthnRegister(optionsJSON) {
 
 // Dual-Engine WebAuthn Authentication (SimpleWebAuthn + Native Fallback)
 async function webAuthnAuthenticate(optionsJSON) {
+  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    throw new Error('WebAuthn Biometrics require opening http://localhost:3000 in your browser.');
+  }
+
   // 1. Try SimpleWebAuthnBrowser v10+ and v9
   if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startAuthentication === 'function') {
     try {
@@ -110,7 +118,7 @@ async function webAuthnAuthenticate(optionsJSON) {
 
   // 2. Native W3C WebAuthn API Fallback (navigator.credentials.get)
   if (!navigator.credentials || !navigator.credentials.get) {
-    throw new Error('Biometric passkeys are not supported on this device/browser.');
+    throw new Error('Biometric passkeys are not supported on this device/browser context.');
   }
 
   const publicKey = {
@@ -145,6 +153,10 @@ function formatWebAuthnErrorMessage(err) {
   const msg = typeof err === 'string' ? err : (err.message || String(err));
   const name = err.name || '';
 
+  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return 'WebAuthn Biometrics require opening http://localhost:3000 in your browser.';
+  }
+
   if (name === 'NotAllowedError' || msg.includes('cancelled') || msg.includes('canceled') || msg.includes('User canceled')) {
     return 'Device biometric authentication prompt was cancelled or timed out. Please try again.';
   }
@@ -152,7 +164,7 @@ function formatWebAuthnErrorMessage(err) {
     return 'This biometric passkey is already registered on your device.';
   }
   if (name === 'NotSupportedError' || msg.includes('not supported')) {
-    return 'Biometric WebAuthn passkeys require a secure connection (HTTPS or http://localhost).';
+    return 'Biometric WebAuthn passkeys require opening http://localhost:3000 or an HTTPS connection.';
   }
   if (msg.includes('The first argument must be of type string') || msg.includes('Received undefined') || msg.includes('not send valid biometric credentials')) {
     return 'Please register your device passkey (Face ID / Fingerprint / Device PIN) first by clicking "🔑 Register Passkey".';
@@ -162,19 +174,20 @@ function formatWebAuthnErrorMessage(err) {
 
 // Safe API Fetch Helper (Prevents HTML response JSON parse errors when static dev server is used)
 async function safeFetchJson(url, options = {}) {
+  options.credentials = 'same-origin';
   const res = await fetch(url, options);
   const contentType = res.headers.get('content-type') || '';
   const text = await res.text();
 
   if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-    throw new Error('Backend server returned HTML instead of API JSON. Ensure the Node.js backend server is running ("npm start" or "node server.js" from project root).');
+    throw new Error('Please open http://localhost:3000 directly in your browser address bar.');
   }
 
   try {
     const data = JSON.parse(text);
     return { status: res.status, ok: res.ok, data };
   } catch (err) {
-    throw new Error('Server response was not valid JSON.');
+    throw new Error('Server response was not valid JSON. Please open http://localhost:3000 directly.');
   }
 }
 
