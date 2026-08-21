@@ -938,9 +938,9 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
           expectedChallenge: challengeRow.challenge,
           expectedOrigin: allowedOrigins,
           expectedRPID: rpID,
-          authenticator: {
-            credentialID: toBufferFromBase64Url(storedCredential.credential_id),
-            credentialPublicKey: toBufferFromBase64Url(storedCredential.public_key),
+          credential: {
+            id: storedCredential.credential_id,
+            publicKey: toBufferFromBase64Url(storedCredential.public_key),
             counter: Number(storedCredential.counter)
           }
         });
