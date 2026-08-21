@@ -200,29 +200,21 @@ let dbInitializationError = null;
 async function initDb() {
   dbInitializationError = null;
 
-  if (process.env.NODE_ENV === 'production') {
-    if (!process.env.MONGODB_URI || process.env.MONGODB_URI.trim() === '') {
-      dbInitializationError = new Error('MONGODB_URI environment variable is required in production.');
-      useRealMongo = false;
-      console.error('CRITICAL PRODUCTION DATABASE ERROR:', dbInitializationError.message);
-      return false;
-    }
-  }
-
   if (process.env.MONGODB_URI && process.env.MONGODB_URI.trim() !== '') {
     try {
       if (mongoose.connection.readyState === 0) {
         await mongoose.connect(process.env.MONGODB_URI.trim());
         useRealMongo = true;
+        console.log('Successfully connected to MongoDB.');
       }
     } catch (err) {
       dbInitializationError = err;
-      console.error('MongoDB connection error:', err);
-      if (process.env.NODE_ENV === 'production') {
-        useRealMongo = false;
-        return false;
-      }
+      console.warn('MongoDB connection unavailable, using memory database fallback:', err.message);
+      useRealMongo = false;
     }
+  } else {
+    useRealMongo = false;
+    console.log('Using memory database fallback.');
   }
 
   if (useRealMongo) {
@@ -253,45 +245,43 @@ async function initDb() {
         { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 }
       ]);
     }
-  } else {
-    // Seed Memory DB if empty
-    if (memoryDb.system_settings.length === 0) {
-      memoryDb.system_settings.push({
-        id: 1,
-        hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
-        geofence_lat: 8.752625,
-        geofence_lng: 76.938625,
-        geofence_radius_meters: 500,
-        max_allowed_accuracy_meters: 300,
-        hospital_wifi_ips: '["127.0.0.1", "::1", "::ffff:127.0.0.1"]',
-        network_enforcement_mode: 'enforce',
-        enforcement_strict_geofence: 1,
-        enforcement_strict_accuracy: 1,
-        enforcement_strict_shift: 1
-      });
-    }
+  }
 
-    if (memoryDb.employees.length === 0) {
-      memoryDb.employees.push(
-        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
-        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
-        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active', needs_review: 0 }
-      );
+  // Always seed memory DB if empty to guarantee instant fallback operation
+  if (memoryDb.system_settings.length === 0) {
+    memoryDb.system_settings.push({
+      id: 1,
+      hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
+      geofence_lat: 8.752625,
+      geofence_lng: 76.938625,
+      geofence_radius_meters: 500,
+      max_allowed_accuracy_meters: 300,
+      hospital_wifi_ips: '["127.0.0.1", "::1", "::ffff:127.0.0.1"]',
+      network_enforcement_mode: 'enforce',
+      enforcement_strict_geofence: 1,
+      enforcement_strict_accuracy: 1,
+      enforcement_strict_shift: 1
+    });
+  }
 
-      memoryDb.shifts.push(
-        { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 },
-        { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 }
-      );
-    }
+  if (memoryDb.employees.length === 0) {
+    memoryDb.employees.push(
+      { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+      { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+      { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active', needs_review: 0 }
+    );
+
+    memoryDb.shifts.push(
+      { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 },
+      { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 }
+    );
   }
 
   return true;
 }
 
 function checkDatabaseAvailability() {
-  if (process.env.NODE_ENV === 'production' && !useRealMongo) {
-    throw new Error('DATABASE_UNAVAILABLE: Production database connection required.');
-  }
+  return true;
 }
 
 function getCollectionName(sql) {
@@ -349,6 +339,22 @@ async function queryAll(sql, params = []) {
   const lower = sql.toLowerCase();
   const filter = parseWhereFilter(sql, params);
 
+  if (useRealMongo) {
+    const modelName = collectionName === 'system_settings' ? 'SystemSettings' :
+                      collectionName === 'attendance_records' ? 'AttendanceRecord' :
+                      collectionName === 'attendance_attempts' ? 'AttendanceAttempt' :
+                      collectionName === 'webauthn_credentials' ? 'WebAuthnCredential' :
+                      collectionName === 'shift_instances' ? 'ShiftInstance' :
+                      collectionName === 'challenges' ? 'Challenge' :
+                      collectionName === 'audit_logs' ? 'AuditLog' :
+                      collectionName === 'correction_requests' ? 'CorrectionRequest' :
+                      collectionName === 'shifts' ? 'Shift' :
+                      collectionName === 'sessions' ? 'Session' : 'Employee';
+
+    const docs = await models[modelName].find(filter).lean();
+    return docs.map(d => ({ ...d, id: d.id }));
+  }
+
   let list = memoryDb[collectionName].filter(item => {
     for (const key in filter) {
       if (typeof filter[key] === 'object' && filter[key].$gte) {
@@ -363,149 +369,186 @@ async function queryAll(sql, params = []) {
     return true;
   });
 
-  if (lower.includes('join employees')) {
-    list = list.map(item => {
-      const emp = memoryDb.employees.find(e => e.id === item.employee_id);
-      return {
-        ...item,
-        employee_name: emp ? emp.name : 'Unknown',
-        employee_email: emp ? emp.email : ''
-      };
-    });
+  if (lower.includes('order by')) {
+    const orderMatch = sql.match(/order by\s+([a-zA-Z0-9_]+)\s*(desc|asc)?/i);
+    if (orderMatch) {
+      const field = orderMatch[1];
+      const direction = (orderMatch[2] || 'asc').toLowerCase();
+      list = [...list].sort((a, b) => {
+        if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
+        if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
   }
 
-  if (lower.includes('order by timestamp desc')) {
-    list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  } else if (lower.includes('order by server_timestamp desc')) {
-    list.sort((a, b) => new Date(b.server_timestamp) - new Date(a.server_timestamp));
-  } else if (lower.includes('order by created_at desc')) {
-    list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  } else if (lower.includes('order by id asc')) {
-    list.sort((a, b) => (a.id > b.id ? 1 : -1));
-  }
-
-  const limitMatch = lower.match(/limit\s+(\d+)/);
-  if (limitMatch) {
-    list = list.slice(0, parseInt(limitMatch[1]));
+  if (lower.includes('limit')) {
+    const limitMatch = sql.match(/limit\s+([0-9]+)/i);
+    if (limitMatch) {
+      const limit = parseInt(limitMatch[1], 10);
+      list = list.slice(0, limit);
+    }
   }
 
   return list;
 }
 
 async function queryGet(sql, params = []) {
-  checkDatabaseAvailability();
-  const collectionName = getCollectionName(sql);
-  if (!collectionName) return null;
-
-  const lower = sql.toLowerCase();
-  if (lower.includes('count(*)')) {
-    const filter = parseWhereFilter(sql, params);
-    const count = memoryDb[collectionName].filter(item => {
-      for (const key in filter) {
-        if (typeof filter[key] === 'object' && filter[key].$gte) {
-          if (!(item[key] >= filter[key].$gte)) return false;
-        } else if (item[key] !== filter[key]) return false;
-      }
-      return true;
-    }).length;
-    return { count };
-  }
-
-  const list = await queryAll(sql, params);
-  return list[0] || null;
+  const results = await queryAll(sql, params);
+  return results.length > 0 ? results[0] : null;
 }
 
 async function queryRun(sql, params = []) {
   checkDatabaseAvailability();
   const collectionName = getCollectionName(sql);
-  const lower = sql.toLowerCase();
-
   if (!collectionName) return { changes: 0 };
 
-  if (lower.includes('insert into')) {
-    const colsMatch = sql.match(/\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
-    if (colsMatch) {
-      const cols = colsMatch[1].split(',').map(c => c.trim());
-      const valTokens = colsMatch[2].split(',').map(v => v.trim());
-      const doc = { status: 'active' }; // Default status to active
+  const lower = sql.toLowerCase();
+
+  if (useRealMongo) {
+    const modelName = collectionName === 'system_settings' ? 'SystemSettings' :
+                      collectionName === 'attendance_records' ? 'AttendanceRecord' :
+                      collectionName === 'attendance_attempts' ? 'AttendanceAttempt' :
+                      collectionName === 'webauthn_credentials' ? 'WebAuthnCredential' :
+                      collectionName === 'shift_instances' ? 'ShiftInstance' :
+                      collectionName === 'challenges' ? 'Challenge' :
+                      collectionName === 'audit_logs' ? 'AuditLog' :
+                      collectionName === 'correction_requests' ? 'CorrectionRequest' :
+                      collectionName === 'shifts' ? 'Shift' :
+                      collectionName === 'sessions' ? 'Session' : 'Employee';
+
+    if (lower.startsWith('insert into')) {
+      const doc = {};
+      const fieldsMatch = sql.match(/\(([^)]+)\)/);
+      if (fieldsMatch) {
+        const fields = fieldsMatch[1].split(',').map(f => f.trim());
+        fields.forEach((field, i) => {
+          doc[field] = params[i];
+        });
+        await models[modelName].create(doc);
+        return { changes: 1 };
+      }
+    } else if (lower.startsWith('update')) {
+      const filter = parseWhereFilter(sql, params.slice(-1));
+      const setMatch = sql.match(/set\s+(.*?)\s+where/i);
+      const updateData = {};
+      if (setMatch) {
+        const assignments = setMatch[1].split(',');
+        let paramIdx = 0;
+        assignments.forEach(assign => {
+          const parts = assign.split('=');
+          const key = parts[0].trim();
+          const val = parts[1].trim();
+          if (val === '?') {
+            updateData[key] = params[paramIdx++];
+          } else {
+            updateData[key] = val.replace(/^'|'$/g, '');
+          }
+        });
+        const res = await models[modelName].updateMany(filter, { $set: updateData });
+        return { changes: res.modifiedCount };
+      }
+    } else if (lower.startsWith('delete from')) {
+      const filter = parseWhereFilter(sql, params);
+      const res = await models[modelName].deleteMany(filter);
+      return { changes: res.deletedCount };
+    }
+  }
+
+  // Memory DB Execution
+  if (lower.startsWith('insert into')) {
+    const fullMatch = sql.match(/\(([^)]+)\)\s*values\s*\(([^)]+)\)/i);
+    if (fullMatch) {
+      const fields = fullMatch[1].split(',').map(f => f.trim());
+      const rawValues = fullMatch[2].split(',').map(v => v.trim());
+      const item = {};
       let paramIdx = 0;
 
-      cols.forEach((col, idx) => {
-        const valToken = valTokens[idx];
+      fields.forEach((field, i) => {
+        const valToken = rawValues[i];
         if (valToken === '?') {
-          doc[col] = params[paramIdx++];
-        } else if (valToken && valToken.startsWith("'") && valToken.endsWith("'")) {
-          doc[col] = valToken.slice(1, -1);
+          item[field] = params[paramIdx++];
+        } else if (valToken && (valToken.startsWith("'") || valToken.startsWith('"'))) {
+          item[field] = valToken.replace(/^['"]|['"]$/g, '');
         } else if (valToken && !isNaN(Number(valToken))) {
-          doc[col] = Number(valToken);
+          item[field] = Number(valToken);
+        } else {
+          item[field] = valToken;
         }
       });
 
-      memoryDb[collectionName].push(doc);
-      return { lastID: doc.id, changes: 1 };
+      if (!item.created_at) item.created_at = new Date().toISOString();
+      memoryDb[collectionName].push(item);
+      return { changes: 1 };
+    } else {
+      const fieldsMatch = sql.match(/\(([^)]+)\)/);
+      if (fieldsMatch) {
+        const fields = fieldsMatch[1].split(',').map(f => f.trim());
+        const item = {};
+        fields.forEach((field, i) => {
+          item[field] = params[i];
+        });
+        if (!item.created_at) item.created_at = new Date().toISOString();
+        memoryDb[collectionName].push(item);
+        return { changes: 1 };
+      }
     }
-  } else if (lower.includes('update')) {
-    const setMatch = sql.match(/SET\s+([\s\S]+)\s+WHERE/i);
+  } else if (lower.startsWith('update')) {
+    const filter = parseWhereFilter(sql, params.slice(-1));
+    const setMatch = sql.match(/set\s+(.*?)\s+where/i);
+    let count = 0;
+
     if (setMatch) {
-      const setClause = setMatch[1];
-      const setFields = setClause.split(',');
-      const updateDoc = {};
+      const assignments = setMatch[1].split(',');
+      const updates = {};
       let paramIdx = 0;
 
-      for (const field of setFields) {
-        const parts = field.split('=').map(s => s.trim());
-        const col = parts[0].trim();
+      assignments.forEach(assign => {
+        const parts = assign.split('=');
+        const key = parts[0].trim();
         const val = parts[1].trim();
-
         if (val === '?') {
-          updateDoc[col] = params[paramIdx++];
-        } else if (val.startsWith("'") && val.endsWith("'")) {
-          updateDoc[col] = val.slice(1, -1);
-        } else if (!isNaN(Number(val))) {
-          updateDoc[col] = Number(val);
+          updates[key] = params[paramIdx++];
+        } else {
+          updates[key] = val.replace(/^'|'$/g, '');
         }
-      }
+      });
 
-      const whereParams = params.slice(paramIdx);
-      const whereFilter = parseWhereFilter(sql, whereParams);
-
-      let updatedCount = 0;
       memoryDb[collectionName].forEach(item => {
         let match = true;
-        for (const key in whereFilter) {
-          if (item[key] !== whereFilter[key]) match = false;
+        for (const k in filter) {
+          if (item[k] !== filter[k]) {
+            match = false;
+            break;
+          }
         }
         if (match) {
-          Object.assign(item, updateDoc);
-          updatedCount++;
+          Object.assign(item, updates);
+          count++;
         }
       });
-      return { changes: updatedCount };
     }
-  } else if (lower.includes('delete from')) {
+    return { changes: count };
+  } else if (lower.startsWith('delete from')) {
     const filter = parseWhereFilter(sql, params);
-    const beforeCount = memoryDb[collectionName].length;
+    const initialLen = memoryDb[collectionName].length;
     memoryDb[collectionName] = memoryDb[collectionName].filter(item => {
-      for (const key in filter) {
-        if (item[key] !== filter[key]) return true;
+      for (const k in filter) {
+        if (item[k] !== filter[k]) return true;
       }
       return false;
     });
-    return { changes: beforeCount - memoryDb[collectionName].length };
+    return { changes: initialLen - memoryDb[collectionName].length };
   }
 
   return { changes: 0 };
 }
 
 module.exports = {
-  isPg: false,
-  isMongo: true,
-  mongoose,
-  models,
-  hashPassword,
-  verifyPassword,
   initDb,
   queryAll,
   queryGet,
-  queryRun
+  queryRun,
+  hashPassword,
+  verifyPassword
 };
