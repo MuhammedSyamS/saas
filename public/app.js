@@ -153,6 +153,13 @@ function formatWebAuthnErrorMessage(err) {
   const msg = typeof err === 'string' ? err : (err.message || String(err));
   const name = err.name || '';
 
+  if (msg.includes('Invalid authentication session token') || msg.includes('Authentication session required')) {
+    state.currentEmployee = null;
+    updateUnauthenticatedUI();
+    switchAuthTab('login');
+    return 'Your login session expired. Please log in again using 🔐 Login.';
+  }
+
   if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
     return 'WebAuthn Biometrics require opening http://localhost:3000 in your browser.';
   }
@@ -224,9 +231,9 @@ async function fetchInitialData() {
 // Check Active Authentication Session
 async function checkAuthSession() {
   try {
-    const { data } = await safeFetchJson('/api/auth/me');
+    const { status, data } = await safeFetchJson('/api/auth/me');
 
-    if (data.success && data.employee) {
+    if (status === 200 && data.success && data.employee) {
       state.currentEmployee = data.employee;
       state.shifts = data.shifts || [];
       state.hasPasskey = !!data.hasPasskey;
@@ -399,10 +406,16 @@ async function registerWebAuthnPasskey() {
 
   try {
     showAlert('Requesting passkey registration options from server...', 'info');
-    const { data: optData } = await safeFetchJson('/api/webauthn/register-options');
+    const { status, data: optData } = await safeFetchJson('/api/webauthn/register-options');
 
-    if (!optData.success) {
-      throw new Error(optData.error || 'Failed to get registration options');
+    if (status === 401 || !optData.success) {
+      if (status === 401 || (optData && optData.reasonCode === 'UNAUTHENTICATED')) {
+        state.currentEmployee = null;
+        updateUnauthenticatedUI();
+        switchAuthTab('login');
+        return showAlert('Session expired. Please log in first.', 'info');
+      }
+      throw new Error((optData && optData.error) || 'Failed to get registration options');
     }
 
     showAlert('Please authenticate on your device (Face ID / Fingerprint / Device Lock)...', 'info');
@@ -410,7 +423,7 @@ async function registerWebAuthnPasskey() {
     // Call Dual-Engine Registration Helper (SimpleWebAuthn + Native Fallback)
     const credential = await webAuthnRegister(optData.options);
 
-    const { data: verifyData } = await safeFetchJson('/api/webauthn/register-verify', {
+    const { status: vStatus, data: verifyData } = await safeFetchJson('/api/webauthn/register-verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -419,7 +432,7 @@ async function registerWebAuthnPasskey() {
       })
     });
 
-    if (verifyData.success) {
+    if (vStatus === 200 && verifyData.success) {
       state.hasPasskey = true;
       if (document.getElementById('summaryPasskey')) {
         document.getElementById('summaryPasskey').textContent = '✓ Passkey Registered';
@@ -428,7 +441,13 @@ async function registerWebAuthnPasskey() {
       showAlert('🎉 Biometric WebAuthn Passkey registered successfully! You can now Punch Attendance.', 'success');
       await checkAuthSession();
     } else {
-      throw new Error(verifyData.error || 'Passkey registration verification failed');
+      if (vStatus === 401 || (verifyData && verifyData.reasonCode === 'UNAUTHENTICATED')) {
+        state.currentEmployee = null;
+        updateUnauthenticatedUI();
+        switchAuthTab('login');
+        return showAlert('Session expired during passkey registration. Please log in again.', 'info');
+      }
+      throw new Error((verifyData && verifyData.error) || 'Passkey registration verification failed');
     }
   } catch (err) {
     const formattedError = formatWebAuthnErrorMessage(err);
@@ -495,10 +514,15 @@ async function initiateHighTrustPunch() {
       body: JSON.stringify({ action: targetAction })
     });
 
-    if (!challengeData.success) {
+    if (chStatus === 401 || !challengeData.success) {
       updateProgressStep('stepIdentity', 'failed', 'Challenge Failed');
       showModalFooter();
-      if (chStatus === 401) updateUnauthenticatedUI();
+      if (chStatus === 401) {
+        state.currentEmployee = null;
+        updateUnauthenticatedUI();
+        switchAuthTab('login');
+        showAlert('Session expired. Please log in again.', 'info');
+      }
       throw new Error(challengeData.error || 'Failed to acquire single-use challenge');
     }
 
