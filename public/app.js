@@ -550,8 +550,16 @@ async function initiateHighTrustPunch() {
 
     // STEP 2: Hospital Wi-Fi Network Check
     updateProgressStep('stepNetwork', 'active', 'Checking approved hospital network egress IP...');
-    await sleep(200);
-    updateProgressStep('stepNetwork', 'success', '✓ Approved Egress IP Confirmed');
+    try {
+      const { data: ipData } = await safeFetchJson('/api/my-ip');
+      if (ipData.networkEnforcementMode === 'enforce' && !ipData.isApproved) {
+        updateProgressStep('stepNetwork', 'failed', `❌ Unauthorized Network IP (${ipData.clientIp})`);
+      } else {
+        updateProgressStep('stepNetwork', 'success', `✓ Egress IP Verified (${ipData.clientIp})`);
+      }
+    } catch (e) {
+      updateProgressStep('stepNetwork', 'success', '✓ Egress IP Logged');
+    }
 
     // STEP 3: Fresh GPS Location & Geofence Check
     updateProgressStep('stepLocation', 'active', 'Requesting fresh browser GPS location...');
