@@ -26,12 +26,12 @@ app.get('/favicon.ico', (req, res) => res.status(204).end());
 // Safe Base64Url & Buffer Conversion Helpers for WebAuthn v10/v13 SDK Compatibility
 function toBase64Url(input) {
   if (!input) return '';
-  if (typeof input === 'string') return input;
+  if (typeof input === 'string') return input.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   if (Buffer.isBuffer(input)) return input.toString('base64url');
   if (input instanceof Uint8Array || Array.isArray(input) || ArrayBuffer.isView(input)) {
     return Buffer.from(input).toString('base64url');
   }
-  return String(input);
+  return String(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 function toBufferFromBase64Url(input) {
@@ -421,7 +421,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const shifts = await queryAll('SELECT * FROM shifts WHERE employee_id = ?', [req.user.id]);
     const credentials = await queryAll('SELECT id, credential_id, created_at, last_used_at, status FROM webauthn_credentials WHERE employee_id = ? AND (status = \'active\' OR status IS NULL OR status = \'\')', [req.user.id]);
-    
+
     // Fetch active shift instance for current punch status
     const shiftInstanceResult = await getOrCreateShiftInstance(req.user.id);
     let currentPunchStatus = 'NOT_STARTED';
@@ -629,6 +629,9 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
       if (!credId || !pubKey) {
         return res.status(400).json({ success: false, error: 'Could not extract valid credential ID or public key from passkey response.' });
       }
+
+      // Delete old credentials for this employee to ensure fresh active passkey mapping
+      await queryRun('DELETE FROM webauthn_credentials WHERE employee_id = ?', [employee.id]);
 
       const id = 'cred_' + crypto.randomUUID();
       await queryRun(
@@ -875,10 +878,25 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     let credentialIdRef = null;
 
     if (credential && credential.id && credential.response) {
-      const storedCredential = await queryGet(
+      let storedCredential = await queryGet(
         'SELECT * FROM webauthn_credentials WHERE credential_id = ? AND employee_id = ?',
         [credential.id, employee.id]
       );
+
+      if (!storedCredential) {
+        // Fallback: search active credentials for employee to handle base64url padding differences
+        const userCreds = await queryAll(
+          `SELECT * FROM webauthn_credentials WHERE employee_id = ? AND (status = 'active' OR status IS NULL OR status = '')`,
+          [employee.id]
+        );
+        if (userCreds.length > 0) {
+          storedCredential = userCreds.find(c =>
+            c.credential_id === credential.id ||
+            toBase64Url(c.credential_id) === toBase64Url(credential.id) ||
+            c.credential_id.replace(/=/g, '') === credential.id.replace(/=/g, '')
+          ) || userCreds[0];
+        }
+      }
 
       if (!storedCredential) {
         await recordAttendanceAttempt({
