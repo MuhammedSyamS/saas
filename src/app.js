@@ -599,9 +599,11 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
     const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
     const clientOrigin = req.get('origin');
     const hostOrigin = `${req.protocol}://${req.get('host')}`;
+    const httpsHostOrigin = `https://${req.get('host')}`;
     const allowedOrigins = Array.from(new Set([
       clientOrigin,
       hostOrigin,
+      httpsHostOrigin,
       'http://localhost:3000',
       'http://127.0.0.1:3000',
       'http://localhost:5173',
@@ -921,9 +923,11 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
         const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
         const clientOrigin = req.get('origin');
         const hostOrigin = `${req.protocol}://${req.get('host')}`;
+        const httpsHostOrigin = `https://${req.get('host')}`;
         const allowedOrigins = Array.from(new Set([
           clientOrigin,
           hostOrigin,
+          httpsHostOrigin,
           'http://localhost:3000',
           'http://127.0.0.1:3000',
           'http://localhost:5173',
@@ -1275,9 +1279,10 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       return res.status(500).json({ success: false, reasonCode: 'DATABASE_UNAVAILABLE', error: 'Database service unavailable.' });
     }
     console.error('[Attendance Punch Error]:', err);
+    const isAuthErr = err.message && (err.message.includes('counter') || err.message.includes('signature') || err.message.includes('origin') || err.message.includes('challenge') || err.message.includes('credential'));
     return res.status(400).json({
       success: false,
-      reasonCode: 'INTERNAL_VALIDATION_FAILURE',
+      reasonCode: isAuthErr ? 'AUTHENTICATION_FAILED' : 'ATTENDANCE_VALIDATION_FAILED',
       error: err.message || 'An error occurred during attendance verification.'
     });
   }
