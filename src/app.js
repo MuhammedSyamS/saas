@@ -66,6 +66,18 @@ function getTrustedClientIp(req) {
   return (remoteAddr || '127.0.0.1').replace(/^::ffff:/, '');
 }
 
+// WebAuthn Relying Party ID Helper (Spec-Compliant Hostname Resolution)
+function getRPID(req) {
+  const currentHost = (req.hostname || req.get('host') || 'localhost').split(':')[0];
+  if (process.env.WEBAUTHN_RP_ID && process.env.WEBAUTHN_RP_ID.trim() !== '') {
+    const envRp = process.env.WEBAUTHN_RP_ID.trim();
+    if (currentHost === envRp || currentHost.endsWith('.' + envRp)) {
+      return envRp;
+    }
+  }
+  return currentHost === 'localhost' ? 'localhost' : currentHost;
+}
+
 // Strict Hospital Network & CIDR Subnet Matcher
 function isApprovedHospitalNetwork(clientIp, allowedIpsInput) {
   if (!clientIp) return false;
@@ -756,7 +768,7 @@ app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
 app.get('/api/webauthn/register-options', requireAuth, async (req, res) => {
   try {
     const employee = req.user;
-    const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
+    const rpID = getRPID(req);
 
     const empIdStr = String(employee.id || 'emp_default');
     const options = await generateRegistrationOptions({
@@ -802,7 +814,7 @@ app.post('/api/webauthn/register-verify', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Registration challenge session expired. Please tap Register Passkey again.' });
     }
 
-    const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
+    const rpID = getRPID(req);
     const clientOrigin = req.get('origin');
     const hostOrigin = `${req.protocol}://${req.get('host')}`;
     const httpsHostOrigin = `https://${req.get('host')}`;
@@ -873,7 +885,7 @@ app.post('/api/attendance/challenge', requireAuth, requireEmployee, async (req, 
       return res.status(400).json({ success: false, error: 'Valid action (CHECK_IN or CHECK_OUT) required.' });
     }
 
-    const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
+    const rpID = getRPID(req);
     const userCredentials = await queryAll(
       `SELECT credential_id, transports FROM webauthn_credentials WHERE employee_id = ? AND (status = 'active' OR status IS NULL OR status = '')`,
       [employee.id]
@@ -1140,7 +1152,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
         webauthnVerified = true;
         credentialIdRef = storedCredential.credential_id;
       } else {
-        const rpID = process.env.WEBAUTHN_RP_ID || (req.hostname === 'localhost' ? 'localhost' : req.hostname);
+        const rpID = getRPID(req);
         const clientOrigin = req.get('origin');
         const hostOrigin = `${req.protocol}://${req.get('host')}`;
         const httpsHostOrigin = `https://${req.get('host')}`;
