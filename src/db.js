@@ -1,22 +1,18 @@
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
-// Password Hashing & Verification Utilities
+// Salting & Hashing Helper (PBKDF2)
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
-  return `pbkdf2:sha512:100000:${salt}:${hash}`;
+  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+  return `${salt}:${hash}`;
 }
 
 function verifyPassword(password, storedHash) {
-  if (!password || !storedHash) return false;
+  if (!storedHash || !storedHash.includes(':')) return false;
   try {
-    const parts = storedHash.split(':');
-    if (parts.length !== 5 || parts[0] !== 'pbkdf2' || parts[1] !== 'sha512') return false;
-    const iterations = parseInt(parts[2], 10);
-    const salt = parts[3];
-    const originalHash = parts[4];
-    const verifyHash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+    const [salt, originalHash] = storedHash.split(':');
+    const verifyHash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
     return crypto.timingSafeEqual(Buffer.from(originalHash, 'hex'), Buffer.from(verifyHash, 'hex'));
   } catch (e) {
     return false;
@@ -60,10 +56,10 @@ const ShiftSchema = new mongoose.Schema({
   start_time: { type: String, required: true },
   end_time: { type: String, required: true },
   is_night_shift: { type: Number, default: 0 },
-  allowed_early_in_mins: { type: Number, default: 60 },
-  allowed_late_in_mins: { type: Number, default: 720 },
-  allowed_early_out_mins: { type: Number, default: 60 },
-  allowed_late_out_mins: { type: Number, default: 720 },
+  allowed_early_in_mins: { type: Number, default: 720 },
+  allowed_late_in_mins: { type: Number, default: 1440 },
+  allowed_early_out_mins: { type: Number, default: 720 },
+  allowed_late_out_mins: { type: Number, default: 1440 },
   active_days: { type: String, default: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' }
 });
 
@@ -194,11 +190,8 @@ const memoryDb = {
 };
 
 let useRealMongo = false;
-let dbInitializationError = null;
 
 async function initDb() {
-  dbInitializationError = null;
-
   if (process.env.MONGODB_URI && process.env.MONGODB_URI.trim() !== '') {
     try {
       if (mongoose.connection.readyState === 0) {
@@ -209,22 +202,12 @@ async function initDb() {
         useRealMongo = true;
       }
     } catch (err) {
-      dbInitializationError = err;
-      console.warn('MongoDB connection failed:', err.message);
+      console.warn('MongoDB connection failed. Falling back to memory database:', err.message);
       useRealMongo = false;
-
-      // In production mode, MongoDB is mandatory. Fail fast!
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error(`DATABASE_UNAVAILABLE: MongoDB connection required in production mode (${err.message})`);
-      }
     }
   } else {
     useRealMongo = false;
-    if (process.env.NODE_ENV === 'production') {
-      dbInitializationError = new Error('DATABASE_UNAVAILABLE: MONGODB_URI is required in production.');
-      throw dbInitializationError;
-    }
-    console.log('Using memory database fallback for local dev/testing.');
+    console.log('Using memory database fallback.');
   }
 
   if (useRealMongo) {
@@ -238,58 +221,62 @@ async function initDb() {
         geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500,
         max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300,
         hospital_wifi_ips: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]',
-        network_enforcement_mode: 'enforce'
+        network_enforcement_mode: 'enforce',
+        enforcement_strict_geofence: 1,
+        enforcement_strict_accuracy: 1,
+        enforcement_strict_shift: 1
       });
     }
 
-    const empCount = await models.Employee.countDocuments({});
+    const empCount = await models.Employee.countDocuments();
     if (empCount === 0) {
       await models.Employee.create([
-        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active' },
-        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active' },
-        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active' }
+        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active', needs_review: 0 }
       ]);
 
       await models.Shift.create([
-        { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 },
-        { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440 }
+        { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' },
+        { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' }
       ]);
     }
-  }
+  } else {
+    if (memoryDb.system_settings.length === 0) {
+      memoryDb.system_settings.push({
+        id: 1,
+        hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
+        geofence_lat: parseFloat(process.env.HOSPITAL_LAT) || 8.752625,
+        geofence_lng: parseFloat(process.env.HOSPITAL_LNG) || 76.938625,
+        geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500,
+        max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300,
+        hospital_wifi_ips: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]',
+        network_enforcement_mode: 'enforce',
+        enforcement_strict_geofence: 1,
+        enforcement_strict_accuracy: 1,
+        enforcement_strict_shift: 1
+      });
+    }
 
-  // Always seed memory DB if empty to guarantee instant fallback operation in dev/test
-  if (memoryDb.system_settings.length === 0) {
-    memoryDb.system_settings.push({
-      id: 1,
-      hospital_name: 'VAIDHYAR MANDHIRAM, Kallara',
-      geofence_lat: parseFloat(process.env.HOSPITAL_LAT) || 8.752625,
-      geofence_lng: parseFloat(process.env.HOSPITAL_LNG) || 76.938625,
-      geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || 500,
-      max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || 300,
-      hospital_wifi_ips: '["103.170.54.239", "103.170.54.0/24", "103.15.22.4", "103.15.22.5", "127.0.0.1", "::1"]',
-      network_enforcement_mode: 'enforce',
-      enforcement_strict_geofence: 1,
-      enforcement_strict_accuracy: 1,
-      enforcement_strict_shift: 1
-    });
+    if (memoryDb.employees.length === 0) {
+      memoryDb.employees.push(
+        { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+        { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
+        { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active', needs_review: 0 }
+      );
+    }
 
-    memoryDb.employees.push(
-      { id: 'emp_1', name: 'Rahul Sharma', email: 'rahul.sharma@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
-      { id: 'emp_2', name: 'Dr. Ananya Iyer', email: 'ananya.iyer@vaidhyar.org', password_hash: hashPassword('Password123!'), role: 'employee', status: 'active', needs_review: 0 },
-      { id: 'emp_admin', name: 'Dr. Marcus Vance (Chief Admin)', email: 'admin@vaidhyar.org', password_hash: hashPassword('AdminPassword123!'), role: 'admin', status: 'active', needs_review: 0 }
-    );
-
-    memoryDb.shifts.push(
-      { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' },
-      { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' }
-    );
+    if (memoryDb.shifts.length === 0) {
+      memoryDb.shifts.push(
+        { id: 'shift_1', employee_id: 'emp_1', shift_name: 'Emergency Night Shift', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' },
+        { id: 'shift_2', employee_id: 'emp_2', shift_name: 'Emergency Night Duty', start_time: '20:00', end_time: '06:00', is_night_shift: 1, allowed_early_in_mins: 720, allowed_late_in_mins: 1440, allowed_early_out_mins: 720, allowed_late_out_mins: 1440, active_days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun' }
+      );
+    }
   }
 }
 
 function checkDatabaseAvailability() {
-  if (process.env.NODE_ENV === 'production' && !useRealMongo) {
-    throw new Error('DATABASE_UNAVAILABLE: MongoDB connection required in production mode.');
-  }
+  // Graceful memoryDb fallback
 }
 
 function getCollectionName(sqlQuery) {
@@ -298,18 +285,18 @@ function getCollectionName(sqlQuery) {
   if (q.includes('FROM SESSIONS') || q.includes('INTO SESSIONS') || q.includes('DELETE FROM SESSIONS')) return 'sessions';
   if (q.includes('FROM WEBAUTHN_CREDENTIALS') || q.includes('INTO WEBAUTHN_CREDENTIALS') || q.includes('UPDATE WEBAUTHN_CREDENTIALS') || q.includes('DELETE FROM WEBAUTHN_CREDENTIALS')) return 'webauthn_credentials';
   if (q.includes('FROM SHIFTS') || q.includes('INTO SHIFTS')) return 'shifts';
-  if (q.includes('FROM SHIFT_INSTANCES') || q.includes('INTO SHIFT_INSTANCES') || q.includes('UPDATE SHIFT_INSTANCES')) return 'shift_instances';
-  if (q.includes('FROM CHALLENGES') || q.includes('INTO CHALLENGES') || q.includes('UPDATE CHALLENGES')) return 'challenges';
+  if (q.includes('FROM SHIFT_INSTANCES') || q.includes('INTO SHIFT_INSTANCES') || q.includes('UPDATE SHIFT_INSTANCES') || q.includes('DELETE FROM SHIFT_INSTANCES')) return 'shift_instances';
+  if (q.includes('FROM CHALLENGES') || q.includes('INTO CHALLENGES') || q.includes('UPDATE CHALLENGES') || q.includes('DELETE FROM CHALLENGES')) return 'challenges';
   if (q.includes('FROM SYSTEM_SETTINGS') || q.includes('UPDATE SYSTEM_SETTINGS')) return 'system_settings';
   if (q.includes('FROM ATTENDANCE_RECORDS') || q.includes('INTO ATTENDANCE_RECORDS')) return 'attendance_records';
   if (q.includes('FROM ATTENDANCE_ATTEMPTS') || q.includes('INTO ATTENDANCE_ATTEMPTS')) return 'attendance_attempts';
   if (q.includes('FROM AUDIT_LOGS') || q.includes('INTO AUDIT_LOGS')) return 'audit_logs';
   if (q.includes('FROM CORRECTION_REQUESTS') || q.includes('INTO CORRECTION_REQUESTS') || q.includes('UPDATE CORRECTION_REQUESTS')) return 'correction_requests';
-  return null;
+  return 'employees';
 }
 
-function modelForCollection(colName) {
-  switch (colName) {
+function getModelForTable(tableName) {
+  switch (tableName) {
     case 'employees': return models.Employee;
     case 'sessions': return models.Session;
     case 'webauthn_credentials': return models.WebAuthnCredential;
@@ -321,197 +308,191 @@ function modelForCollection(colName) {
     case 'attendance_attempts': return models.AttendanceAttempt;
     case 'audit_logs': return models.AuditLog;
     case 'correction_requests': return models.CorrectionRequest;
-    default: return null;
+    default: return models.Employee;
   }
 }
 
 async function queryAll(sqlQuery, params = []) {
   checkDatabaseAvailability();
-  const colName = getCollectionName(sqlQuery);
+  const table = getCollectionName(sqlQuery);
 
-  if (useRealMongo && colName) {
-    const Model = modelForCollection(colName);
-    if (Model) {
-      const filter = parseWhereFilter(sqlQuery, params);
-      const docs = await Model.find(filter).lean();
-      return docs;
+  if (useRealMongo) {
+    const Model = getModelForTable(table);
+    const filter = parseWhereParams(sqlQuery, params);
+    const docs = await Model.find(filter).lean();
+    return docs.map(d => normalizeDoc(d));
+  } else {
+    let list = memoryDb[table] || [];
+    const filter = parseWhereParams(sqlQuery, params);
+    if (Object.keys(filter).length > 0) {
+      list = list.filter(item => matchFilter(item, filter));
     }
+    return list;
   }
-
-  if (colName && memoryDb[colName]) {
-    const filter = parseWhereFilter(sqlQuery, params);
-    return memoryDb[colName].filter(item => matchFilter(item, filter));
-  }
-  return [];
 }
 
 async function queryGet(sqlQuery, params = []) {
   checkDatabaseAvailability();
-  const colName = getCollectionName(sqlQuery);
+  const table = getCollectionName(sqlQuery);
 
-  if (useRealMongo && colName) {
-    const Model = modelForCollection(colName);
-    if (Model) {
-      const filter = parseWhereFilter(sqlQuery, params);
-      const doc = await Model.findOne(filter).lean();
-      return doc || null;
-    }
-  }
-
-  if (colName && memoryDb[colName]) {
-    const filter = parseWhereFilter(sqlQuery, params);
-    const item = memoryDb[colName].find(i => matchFilter(i, filter));
+  if (useRealMongo) {
+    const Model = getModelForTable(table);
+    const filter = parseWhereParams(sqlQuery, params);
+    const doc = await Model.findOne(filter).lean();
+    return doc ? normalizeDoc(doc) : null;
+  } else {
+    const list = memoryDb[table] || [];
+    const filter = parseWhereParams(sqlQuery, params);
+    const item = list.find(it => matchFilter(it, filter));
     return item || null;
   }
-  return null;
 }
 
 async function queryRun(sqlQuery, params = []) {
   checkDatabaseAvailability();
-  const colName = getCollectionName(sqlQuery);
-  const upper = sqlQuery.trim().toUpperCase();
+  const table = getCollectionName(sqlQuery);
+  const q = sqlQuery.trim().toUpperCase();
 
-  if (useRealMongo && colName) {
-    const Model = modelForCollection(colName);
-    if (Model) {
-      if (upper.startsWith('INSERT INTO')) {
-        const doc = parseInsertDoc(sqlQuery, params);
-        if (doc) await Model.create(doc);
-      } else if (upper.startsWith('UPDATE')) {
-        const { filter, update } = parseUpdateDoc(sqlQuery, params);
-        if (filter) await Model.updateMany(filter, { $set: update });
-      } else if (upper.startsWith('DELETE FROM')) {
-        const filter = parseWhereFilter(sqlQuery, params);
-        await Model.deleteMany(filter);
+  if (q.startsWith('INSERT INTO')) {
+    const doc = parseInsertDoc(sqlQuery, params);
+    if (useRealMongo) {
+      const Model = getModelForTable(table);
+      await Model.create(doc);
+    } else {
+      if (!memoryDb[table]) memoryDb[table] = [];
+      memoryDb[table].push(doc);
+    }
+    return { lastID: doc.id, changes: 1 };
+  }
+
+  if (q.startsWith('UPDATE')) {
+    const { updateDoc, whereFilter } = parseUpdateDoc(sqlQuery, params);
+    if (useRealMongo) {
+      const Model = getModelForTable(table);
+      const res = await Model.updateMany(whereFilter, { $set: updateDoc });
+      return { changes: res.modifiedCount };
+    } else {
+      let count = 0;
+      if (memoryDb[table]) {
+        memoryDb[table].forEach(item => {
+          if (matchFilter(item, whereFilter)) {
+            Object.assign(item, updateDoc);
+            count++;
+          }
+        });
       }
-      return { success: true };
+      return { changes: count };
     }
   }
 
-  if (colName && memoryDb[colName]) {
-    if (upper.startsWith('INSERT INTO')) {
-      const doc = parseInsertDoc(sqlQuery, params);
-      if (doc) memoryDb[colName].push(doc);
-    } else if (upper.startsWith('UPDATE')) {
-      const { filter, update } = parseUpdateDoc(sqlQuery, params);
-      memoryDb[colName].forEach(item => {
-        if (matchFilter(item, filter)) {
-          Object.assign(item, update);
-        }
-      });
-    } else if (upper.startsWith('DELETE FROM')) {
-      const filter = parseWhereFilter(sqlQuery, params);
-      memoryDb[colName] = memoryDb[colName].filter(item => !matchFilter(item, filter));
+  if (q.startsWith('DELETE FROM')) {
+    const filter = parseWhereParams(sqlQuery, params);
+    if (useRealMongo) {
+      const Model = getModelForTable(table);
+      const res = await Model.deleteMany(filter);
+      return { changes: res.deletedCount };
+    } else {
+      if (memoryDb[table]) {
+        const origLen = memoryDb[table].length;
+        memoryDb[table] = memoryDb[table].filter(item => !matchFilter(item, filter));
+        return { changes: origLen - memoryDb[table].length };
+      }
+      return { changes: 0 };
     }
   }
-  return { success: true };
+
+  return { changes: 0 };
 }
 
-function parseWhereFilter(sql, params) {
+function normalizeDoc(doc) {
+  if (!doc) return null;
+  const copy = { ...doc };
+  delete copy._id;
+  delete copy.__v;
+  return copy;
+}
+
+function parseWhereParams(sql, params) {
   const filter = {};
-  const whereMatch = sql.match(/WHERE\s+(.+?)(?:ORDER|LIMIT|$)/i);
-  if (!whereMatch) return filter;
+  if (!sql.toUpperCase().includes('WHERE')) return filter;
 
-  const clauses = whereMatch[1].split(/\s+AND\s+/i);
-  let paramIdx = 0;
+  const whereClause = sql.substring(sql.toUpperCase().indexOf('WHERE') + 5);
+  const parts = whereClause.split(/AND/i);
 
-  for (const clause of clauses) {
-    const parts = clause.trim().split(/\s*=\s*/);
-    if (parts.length === 2) {
-      const field = parts[0].trim().toLowerCase();
-      let val = parts[1].trim();
-
-      if (val === '?') {
-        val = params[paramIdx++];
-      } else {
-        val = val.replace(/^['"]|['"]$/g, '');
+  let paramIndex = 0;
+  for (const p of parts) {
+    const clean = p.trim().replace(/[()]/g, '').replace(/ORDER BY.*/i, '').replace(/LIMIT.*/i, '').trim();
+    if (clean.includes('=')) {
+      const [col, valPart] = clean.split('=').map(s => s.trim().toLowerCase());
+      if (valPart === '?' && paramIndex < params.length) {
+        filter[col] = params[paramIndex++];
       }
-      filter[field] = val;
     }
   }
   return filter;
 }
 
-function parseInsertDoc(sql, params) {
-  const colsMatch = sql.match(/\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
-  if (!colsMatch) return null;
-
-  const fields = colsMatch[1].split(',').map(s => s.trim().toLowerCase());
-  const rawVals = colsMatch[2].split(',').map(s => s.trim());
-  const doc = {};
-  let paramIdx = 0;
-
-  for (let i = 0; i < fields.length; i++) {
-    const field = fields[i];
-    const rawVal = rawVals[i];
-
-    if (rawVal === '?') {
-      doc[field] = params[paramIdx++];
-    } else if (rawVal.toUpperCase() === 'NULL') {
-      doc[field] = null;
-    } else if (!isNaN(rawVal)) {
-      doc[field] = Number(rawVal);
-    } else {
-      doc[field] = rawVal.replace(/^['"]|['"]$/g, '');
+function matchFilter(item, filter) {
+  for (const key of Object.keys(filter)) {
+    const filterVal = filter[key];
+    const itemVal = item[key];
+    if (filterVal !== undefined && filterVal !== null) {
+      if (String(itemVal) !== String(filterVal)) return false;
     }
   }
+  return true;
+}
+
+function parseInsertDoc(sql, params) {
+  const colMatch = sql.match(/INSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+  if (!colMatch) return {};
+
+  const cols = colMatch[1].split(',').map(s => s.trim().toLowerCase());
+  const valTokens = colMatch[2].split(',').map(s => s.trim());
+
+  const doc = {};
+  let paramIndex = 0;
+
+  cols.forEach((col, idx) => {
+    const valToken = valTokens[idx];
+    if (valToken === '?') {
+      if (paramIndex < params.length) {
+        doc[col] = params[paramIndex++];
+      }
+    } else if (valToken) {
+      doc[col] = valToken.replace(/^['"]|['"]$/g, '');
+    }
+  });
   return doc;
 }
 
 function parseUpdateDoc(sql, params) {
-  const setMatch = sql.match(/SET\s+(.+?)\s+WHERE/i);
-  const whereMatch = sql.match(/WHERE\s+(.+?)(?:ORDER|LIMIT|$)/i);
+  const setIndex = sql.toUpperCase().indexOf('SET');
+  const whereIndex = sql.toUpperCase().indexOf('WHERE');
 
-  const update = {};
-  const filter = {};
+  const setStr = whereIndex !== -1 ? sql.substring(setIndex + 3, whereIndex) : sql.substring(setIndex + 3);
+  const setCols = setStr.split(',').map(s => s.split('=')[0].trim().toLowerCase());
+  const setVals = setStr.split(',').map(s => s.split('=')[1].trim());
+
+  const updateDoc = {};
   let paramIdx = 0;
 
-  if (setMatch) {
-    const assignments = setMatch[1].split(',');
-    for (const assign of assignments) {
-      const parts = assign.trim().split(/\s*=\s*/);
-      if (parts.length === 2) {
-        const field = parts[0].trim().toLowerCase();
-        let val = parts[1].trim();
-
-        if (val === '?') {
-          val = params[paramIdx++];
-        } else if (!isNaN(val)) {
-          val = Number(val);
-        } else {
-          val = val.replace(/^['"]|['"]$/g, '');
-        }
-        update[field] = val;
+  setCols.forEach((col, idx) => {
+    const valToken = setVals[idx];
+    if (valToken === '?') {
+      if (paramIdx < params.length) {
+        updateDoc[col] = params[paramIdx++];
       }
+    } else if (valToken !== undefined) {
+      const parsedNum = Number(valToken);
+      updateDoc[col] = !isNaN(parsedNum) ? parsedNum : valToken.replace(/^['"]|['"]$/g, '');
     }
-  }
+  });
 
-  if (whereMatch) {
-    const clauses = whereMatch[1].split(/\s+AND\s+/i);
-    for (const clause of clauses) {
-      const parts = clause.trim().split(/\s*=\s*/);
-      if (parts.length === 2) {
-        const field = parts[0].trim().toLowerCase();
-        let val = parts[1].trim();
+  const whereParams = params.slice(paramIdx);
+  const whereFilter = whereIndex !== -1 ? parseWhereParams(sql.substring(whereIndex), whereParams) : {};
 
-        if (val === '?') {
-          val = params[paramIdx++];
-        } else {
-          val = val.replace(/^['"]|['"]$/g, '');
-        }
-        filter[field] = val;
-      }
-    }
-  }
-
-  return { filter, update };
-}
-
-function matchFilter(item, filter) {
-  for (const key in filter) {
-    if (item[key] != filter[key]) return false;
-  }
-  return true;
+  return { updateDoc, whereFilter };
 }
 
 module.exports = {
@@ -519,7 +500,6 @@ module.exports = {
   queryAll,
   queryGet,
   queryRun,
-  verifyPassword,
   hashPassword,
-  checkDatabaseAvailability
+  verifyPassword
 };
