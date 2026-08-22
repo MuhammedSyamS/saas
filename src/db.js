@@ -195,7 +195,10 @@ async function initDb() {
   if (process.env.MONGODB_URI && process.env.MONGODB_URI.trim() !== '') {
     try {
       if (mongoose.connection.readyState === 0) {
-        await mongoose.connect(process.env.MONGODB_URI.trim());
+        await mongoose.connect(process.env.MONGODB_URI.trim(), {
+          serverSelectionTimeoutMS: 4000,
+          connectTimeoutMS: 4000
+        });
         useRealMongo = true;
         console.log('Successfully connected to MongoDB.');
       } else {
