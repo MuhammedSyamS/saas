@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hospital-attendance-v4';
+const CACHE_NAME = 'hospital-attendance-v5';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -15,11 +15,13 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Network first for static assets, bypass API calls to prevent cache interference
+// Network first strategy, pass /api/ requests directly to network
 self.addEventListener('fetch', (event) => {
   if (event.request.url.includes('/api/')) {
+    event.respondWith(fetch(event.request));
     return;
   }
+
   event.respondWith(
     fetch(event.request).catch(async () => {
       const cached = await caches.match(event.request);
