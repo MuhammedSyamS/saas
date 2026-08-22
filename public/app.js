@@ -297,8 +297,15 @@ async function registerWebAuthnPasskey() {
   showAlert('Initializing biometric passkey setup...', 'info');
 
   try {
-    const { data: optData } = await safeFetchJson('/api/webauthn/register-options');
-    if (!optData.success) {
+    const { status: optStatus, data: optData } = await safeFetchJson('/api/webauthn/register-options');
+    if (optStatus === 401 || !optData.success) {
+      if (optStatus === 401) {
+        state.currentEmployee = null;
+        updateUnauthenticatedUI();
+        switchAuthTab('login');
+        showAlert('Session expired. Please log in first.', 'info');
+        return;
+      }
       throw new Error(optData.error || 'Failed to initialize WebAuthn passkey registration.');
     }
 
