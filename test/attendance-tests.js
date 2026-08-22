@@ -339,6 +339,46 @@ async function runEnterpriseTestSuite() {
     }
   });
 
+  // 19. Admin Pilot Network Diagnostics Endpoint
+  await testCase('19. Admin Pilot Network Diagnostics API (/api/admin/network-diagnostics)', async () => {
+    await makeRequest('/api/auth/login', 'POST', { email: 'admin@vaidhyar.org', password: 'AdminPassword123!' });
+    const res = await makeRequest('/api/admin/network-diagnostics');
+    if (res.status !== 200 || !res.body.detectedClientIp || !res.body.configuredHospitalIps) {
+      throw new Error('Admin network diagnostics endpoint failed');
+    }
+  });
+
+  // 20. Admin Pilot Calibration & Debug Endpoint
+  await testCase('20. Admin Pilot Calibration & Debug API (/api/admin/calibrate-debug)', async () => {
+    await makeRequest('/api/auth/login', 'POST', { email: 'admin@vaidhyar.org', password: 'AdminPassword123!' });
+    const res = await makeRequest('/api/admin/calibrate-debug?lat=8.752625&lng=76.938625&accuracy=15');
+    if (res.status !== 200 || !res.body.evaluation || res.body.evaluation.overallPassed !== true) {
+      throw new Error('Admin calibration debug evaluation failed');
+    }
+  });
+
+  // 21. Borderline Location Retry State (BORDERLINE_LOCATION_RETRY)
+  await testCase('21. Borderline location retry state rejection (BORDERLINE_LOCATION_RETRY)', async () => {
+    await queryRun('DELETE FROM shift_instances WHERE employee_id = \'emp_2\'');
+    await makeRequest('/api/auth/login', 'POST', { email: 'ananya.iyer@vaidhyar.org', password: 'Password123!' });
+    const chRes = await makeRequest('/api/attendance/challenge', 'POST', { action: 'CHECK_IN' });
+
+    // Distance ~452m (close to 500m limit) + accuracy ±280m => (452 + 140) = 592m > (500 + 75 = 575m) => RETRY_BORDERLINE
+    const res = await makeRequest('/api/attendance/punch', 'POST', {
+      punchType: 'CHECK_IN',
+      location: { lat: 8.756700, lng: 76.938625, accuracy: 280 },
+      challengeId: chRes.body.challengeId,
+      credential: { id: mockCredId2, response: { clientDataJSON: 'xyz' } }
+    }, { 'x-forwarded-for': '127.0.0.1' });
+
+    if (res.body.reasonCode !== 'BORDERLINE_LOCATION_RETRY') {
+      throw new Error(`Expected BORDERLINE_LOCATION_RETRY but got ${res.body.reasonCode}`);
+    }
+    if (!res.body.correlationId || !res.body.correlationId.startsWith('ATT-')) {
+      throw new Error('Missing or invalid correlation ID format in response payload');
+    }
+  });
+
   server.close();
 
   console.log(`\n==================================================`);

@@ -1,519 +1,407 @@
-// Global Enterprise State
-let state = {
-  settings: null,
-  clientIp: null,
+// Global State Management
+const state = {
   currentEmployee: null,
-  shifts: [],
   hasPasskey: false,
-  currentLocation: null // MUST be initialized as null (No default hospital GPS fallback!)
+  shifts: [],
+  systemSettings: null,
+  clientIp: null
 };
 
-// Base64Url <-> ArrayBuffer Utilities for Dual-Engine WebAuthn
-function bufferToBase64Url(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let string = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    string += String.fromCharCode(bytes[i]);
-  }
-  return btoa(string).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+let currentLocation = null;
+
+// Utility: Sleep helper
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function base64UrlToBuffer(base64url) {
-  if (!base64url) return new Uint8Array(0).buffer;
-  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
-  const padLen = (4 - (base64.length % 4)) % 4;
-  const padded = base64 + '='.repeat(padLen);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
-
-// Authorize Current Network IP Address in Hospital Wi-Fi Whitelist
-async function whitelistCurrentIp() {
-  try {
-    showAlert('Authorizing your current network IP address...', 'info');
-    const { data } = await safeFetchJson('/api/hospital/whitelist-ip', { method: 'POST' });
-    if (data.success) {
-      showAlert(data.message, 'success');
-      await fetchInitialData();
-    } else {
-      showAlert('Authorization error: ' + (data.error || 'Failed to authorize IP'), 'error');
-    }
-  } catch (err) {
-    showAlert('Authorization error: ' + err.message, 'error');
-  }
-}
-
-// Calibrate Hospital Location Center to Staff/Admin's Live GPS
-async function calibrateHospitalLocation() {
-  try {
-    showAlert('Requesting your current browser GPS coordinates...', 'info');
-    const loc = await requestFreshLocation();
-    const { data } = await safeFetchJson('/api/hospital/calibrate-location', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: loc.lat, lng: loc.lng, radiusMeters: 20000 })
-    });
-    if (data.success) {
-      showAlert(data.message, 'success');
-      await fetchInitialData();
-    } else {
-      showAlert('Calibration error: ' + (data.error || 'Failed to calibrate'), 'error');
-    }
-  } catch (err) {
-    showAlert('Calibration error: ' + err.message, 'error');
-  }
-}
-
-// Dual-Engine WebAuthn Registration (SimpleWebAuthn + Native Fallback)
-async function webAuthnRegister(optionsJSON) {
-  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    throw new Error('WebAuthn Biometrics require opening http://localhost:3000 in your browser.');
-  }
-
-  // 1. Try SimpleWebAuthnBrowser v10+ and v9
-  if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
-    try {
-      return await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
-    } catch (e1) {
-      if (e1.name === 'NotAllowedError' || e1.name === 'InvalidStateError' || e1.name === 'NotSupportedError') {
-        throw e1;
-      }
-      try {
-        return await window.SimpleWebAuthnBrowser.startRegistration(optionsJSON);
-      } catch (e2) {
-        if (e2.name === 'NotAllowedError' || e2.name === 'InvalidStateError' || e2.name === 'NotSupportedError') {
-          throw e2;
-        }
-        console.warn('[WebAuthn] SDK startRegistration failed, switching to native WebAuthn:', e2);
-      }
-    }
-  }
-
-  // 2. Native W3C WebAuthn API Fallback (navigator.credentials.create)
-  if (!navigator.credentials || !navigator.credentials.create) {
-    throw new Error('Biometric passkeys are not supported on this device/browser context.');
-  }
-
-  const publicKey = {
-    ...optionsJSON,
-    challenge: base64UrlToBuffer(optionsJSON.challenge),
-    user: {
-      ...optionsJSON.user,
-      id: base64UrlToBuffer(optionsJSON.user.id)
-    },
-    excludeCredentials: (optionsJSON.excludeCredentials || []).map(c => ({
-      ...c,
-      id: base64UrlToBuffer(c.id)
-    }))
-  };
-
-  const cred = await navigator.credentials.create({ publicKey });
-  if (!cred) throw new Error('Biometric passkey creation cancelled or returned no credential.');
-
-  return {
-    id: cred.id,
-    rawId: bufferToBase64Url(cred.rawId),
-    response: {
-      clientDataJSON: bufferToBase64Url(cred.response.clientDataJSON),
-      attestationObject: bufferToBase64Url(cred.response.attestationObject),
-      transports: cred.response.getTransports ? cred.response.getTransports() : ['internal']
-    },
-    type: cred.type,
-    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
-    authenticatorAttachment: cred.authenticatorAttachment || 'platform'
-  };
-}
-
-// Dual-Engine WebAuthn Authentication (SimpleWebAuthn + Native Fallback)
-async function webAuthnAuthenticate(optionsJSON) {
-  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    throw new Error('WebAuthn Biometrics require opening http://localhost:3000 in your browser.');
-  }
-
-  // 1. Try SimpleWebAuthnBrowser v10+ and v9
-  if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startAuthentication === 'function') {
-    try {
-      return await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON });
-    } catch (e1) {
-      if (e1.name === 'NotAllowedError' || e1.name === 'InvalidStateError' || e1.name === 'NotSupportedError') {
-        throw e1;
-      }
-      try {
-        return await window.SimpleWebAuthnBrowser.startAuthentication(optionsJSON);
-      } catch (e2) {
-        if (e2.name === 'NotAllowedError' || e2.name === 'InvalidStateError' || e2.name === 'NotSupportedError') {
-          throw e2;
-        }
-        console.warn('[WebAuthn] SDK startAuthentication failed, switching to native WebAuthn:', e2);
-      }
-    }
-  }
-
-  // 2. Native W3C WebAuthn API Fallback (navigator.credentials.get)
-  if (!navigator.credentials || !navigator.credentials.get) {
-    throw new Error('Biometric passkeys are not supported on this device/browser context.');
-  }
-
-  const publicKey = {
-    ...optionsJSON,
-    challenge: base64UrlToBuffer(optionsJSON.challenge),
-    allowCredentials: (optionsJSON.allowCredentials || []).map(c => ({
-      ...c,
-      id: base64UrlToBuffer(c.id)
-    }))
-  };
-
-  const cred = await navigator.credentials.get({ publicKey });
-  if (!cred) throw new Error('Biometric passkey authentication cancelled or returned no assertion.');
-
-  return {
-    id: cred.id,
-    rawId: bufferToBase64Url(cred.rawId),
-    response: {
-      clientDataJSON: bufferToBase64Url(cred.response.clientDataJSON),
-      authenticatorData: bufferToBase64Url(cred.response.authenticatorData),
-      signature: bufferToBase64Url(cred.response.signature),
-      userHandle: cred.response.userHandle ? bufferToBase64Url(cred.response.userHandle) : undefined
-    },
-    type: cred.type,
-    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {}
-  };
-}
-
-// Format WebAuthn & Device Errors into Clear, Human-Readable Explanations
-function formatWebAuthnErrorMessage(err) {
-  if (!err) return 'An unknown passkey error occurred.';
-  const msg = typeof err === 'string' ? err : (err.message || String(err));
-  const name = err.name || '';
-
-  if (msg.includes('Invalid authentication session token') || msg.includes('Authentication session required')) {
-    state.currentEmployee = null;
-    updateUnauthenticatedUI();
-    switchAuthTab('login');
-    return 'Your login session expired. Please log in again using 🔐 Login.';
-  }
-
-  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return 'WebAuthn Biometrics require opening http://localhost:3000 in your browser.';
-  }
-
-  if (name === 'NotAllowedError' || msg.includes('cancelled') || msg.includes('canceled') || msg.includes('User canceled')) {
-    return 'Device biometric authentication prompt was cancelled or timed out. Please try again.';
-  }
-  if (name === 'InvalidStateError' || msg.includes('already registered')) {
-    return 'This biometric passkey is already registered on your device.';
-  }
-  if (name === 'NotSupportedError' || msg.includes('not supported')) {
-    return 'Biometric WebAuthn passkeys require opening http://localhost:3000 or an HTTPS connection.';
-  }
-  if (msg.includes('The first argument must be of type string') || msg.includes('Received undefined') || msg.includes('not send valid biometric credentials')) {
-    return 'Please register your device passkey (Face ID / Fingerprint / Device PIN) first by clicking "🔑 Register Passkey".';
-  }
-  return msg;
-}
-
-// Safe API Fetch Helper (Prevents HTML response JSON parse errors when static dev server is used)
+// Utility: Safe API Fetch Wrapper
 async function safeFetchJson(url, options = {}) {
-  options.credentials = 'same-origin';
-  const res = await fetch(url, options);
-  const contentType = res.headers.get('content-type') || '';
-  const text = await res.text();
-
-  if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-    throw new Error('Please open http://localhost:3000 directly in your browser address bar.');
-  }
-
   try {
-    const data = JSON.parse(text);
-    return { status: res.status, ok: res.ok, data };
+    const res = await fetch(url, options);
+    const data = await res.json();
+    return { status: res.statusCode || res.status, data };
   } catch (err) {
-    throw new Error('Server response was not valid JSON. Please open http://localhost:3000 directly.');
+    return { status: 500, data: { success: false, error: err.message || 'Network request failed' } };
   }
 }
 
-// Register Service Worker for PWA Shell
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW registration failed:', err));
-  });
+// Global Alert Banner Helper
+function showAlert(message, type = 'info') {
+  const alertEl = document.getElementById('globalAlert');
+  if (!alertEl) return;
+
+  alertEl.className = `alert-banner ${type}`;
+  alertEl.textContent = message;
+  alertEl.style.display = 'block';
+
+  if (type === 'success' || type === 'info') {
+    setTimeout(() => {
+      alertEl.style.display = 'none';
+    }, 5000);
+  }
 }
 
-// Initialize Application
+// DOM Loaded Initialization
 document.addEventListener('DOMContentLoaded', async () => {
-  await fetchInitialData();
-  await checkAuthSession();
+  await loadInitialSystemData();
+  await checkActiveSession();
+  registerServiceWorker();
 });
 
-// Fetch Initial System Data & Network Egress IP
-async function fetchInitialData() {
+// Register PWA Service Worker
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
+      console.warn('[SW Registration Error]:', err);
+    });
+  }
+}
+
+// Load Initial Server Settings & IP Information
+async function loadInitialSystemData() {
   try {
     const { data } = await safeFetchJson('/api/initial-data');
     if (data.success) {
-      state.settings = data.settings;
-      if (data.clientIp) {
-        state.clientIp = data.clientIp;
-        const ipElem = document.getElementById('wifiIpAddress');
-        if (ipElem) ipElem.textContent = data.clientIp;
-      }
+      state.systemSettings = data.settings;
+      state.clientIp = data.clientIp;
     }
-  } catch (err) {
-    showAlert('Backend Connection Notice: ' + err.message, 'error');
+  } catch (e) {
+    console.error('Failed to load initial system data:', e);
   }
 }
 
-// Check Active Authentication Session
-async function checkAuthSession() {
+// Check Active Employee Cookie Session
+async function checkActiveSession() {
   try {
     const { status, data } = await safeFetchJson('/api/auth/me');
-
     if (status === 200 && data.success && data.employee) {
       state.currentEmployee = data.employee;
+      state.hasPasskey = data.hasPasskey || false;
       state.shifts = data.shifts || [];
-      state.hasPasskey = !!data.hasPasskey;
-
       updateAuthenticatedUI();
     } else {
       state.currentEmployee = null;
       updateUnauthenticatedUI();
     }
-  } catch (err) {
+  } catch (e) {
     state.currentEmployee = null;
     updateUnauthenticatedUI();
   }
 }
 
-// Update UI for Authenticated Employee
-function updateAuthenticatedUI() {
-  const emp = state.currentEmployee;
-
-  // Toggle Card Views
-  const authSection = document.getElementById('authCardSection');
-  const punchSection = document.getElementById('punchTab');
-  if (authSection) authSection.style.display = 'none';
-  if (punchSection) punchSection.style.display = 'block';
-
-  // Navbar
-  document.getElementById('userInfoPill').style.display = 'flex';
-  document.getElementById('currentUserName').textContent = `${emp.name}`;
-  document.getElementById('btnLoginLogout').textContent = '🚪 Logout';
-  document.getElementById('btnRegisterPasskey').style.display = 'inline-flex';
-
-  // Greeting
-  const hour = new Date().getHours();
-  let timeGreeting = 'Good Morning';
-  if (hour >= 12 && hour < 17) timeGreeting = 'Good Afternoon';
-  if (hour >= 17) timeGreeting = 'Good Evening';
-  const firstName = emp.name.split(' ')[0];
-
-  document.getElementById('greetingTitle').textContent = `${timeGreeting}, ${firstName}`;
-  document.getElementById('greetingSub').textContent = `Staff Role: ${emp.role.toUpperCase()} | ${emp.email}`;
-
-  // Shift Details
-  const shift = state.shifts.find(s => s.employee_id === emp.id) || state.shifts[0];
-  const shiftNameElem = document.getElementById('assignedShiftName');
-  const shiftTimeElem = document.getElementById('assignedShiftTime');
-
-  if (shift) {
-    shiftNameElem.textContent = shift.shift_name;
-    shiftTimeElem.textContent = `${shift.start_time} – ${shift.end_time}`;
-  } else {
-    shiftNameElem.textContent = 'No Shift Assigned';
-    shiftTimeElem.textContent = 'Contact Hospital HR';
-  }
-
-  // Attendance Status & Punch Button
-  const badge = document.getElementById('attendanceStatusBadge');
-  const statusDot = document.getElementById('statusDot');
-  const statusText = document.getElementById('statusText');
-  const btn = document.getElementById('btnPunchMain');
-  const btnIcon = document.getElementById('btnIcon');
-  const btnLabel = document.getElementById('btnLabel');
-
-  if (emp.role !== 'employee') {
-    btn.style.display = 'none';
-    badge.className = 'attendance-status-badge ready';
-    statusDot.textContent = '🔒';
-    statusText.textContent = 'Admin Mode (View Only)';
-  } else {
-    btn.style.display = 'inline-flex';
-
-    if (emp.current_punch_status === 'CHECKED_IN') {
-      badge.className = 'attendance-status-badge checked_in';
-      statusDot.textContent = '✓';
-      statusText.textContent = 'PUNCHED IN';
-
-      btn.className = 'btn-punch-main out';
-      btnIcon.textContent = '👆';
-      btnLabel.textContent = 'PUNCH OUT';
-    } else if (emp.current_punch_status === 'CHECKED_OUT') {
-      badge.className = 'attendance-status-badge checked_out';
-      statusDot.textContent = '✓';
-      statusText.textContent = 'SHIFT COMPLETED TODAY';
-
-      btn.className = 'btn-punch-main in';
-      btn.disabled = true; // Terminal state for shift instance!
-      btnIcon.textContent = '✓';
-      btnLabel.textContent = 'PUNCH COMPLETED';
-    } else {
-      badge.className = 'attendance-status-badge ready';
-      statusDot.textContent = '●';
-      statusText.textContent = 'Ready to Punch';
-
-      btn.className = 'btn-punch-main in';
-      btn.disabled = false;
-      btnIcon.textContent = '👇';
-      btnLabel.textContent = 'PUNCH IN';
-    }
-  }
-
-  // Summary Row
-  document.getElementById('summaryPasskey').textContent = state.hasPasskey ? '✓ Passkey Registered' : '⚠️ Passkey Required';
-}
-
-function updateUnauthenticatedUI() {
-  const authSection = document.getElementById('authCardSection');
-  const punchSection = document.getElementById('punchTab');
-  if (authSection) authSection.style.display = 'block';
-  if (punchSection) punchSection.style.display = 'none';
-
-  document.getElementById('userInfoPill').style.display = 'none';
-  document.getElementById('btnRegisterPasskey').style.display = 'none';
-  document.getElementById('btnLoginLogout').textContent = '🔑 Login';
-}
-
 // -------------------------------------------------------------
-// AUTH TAB SWITCHING & QUICK LOGIN
+// UI VIEW CONTROLLER
 // -------------------------------------------------------------
+
 function switchAuthTab(tab) {
   const loginForm = document.getElementById('inlineLoginForm');
   const registerForm = document.getElementById('inlineRegisterForm');
-  const btnLogin = document.getElementById('tabBtnLogin');
-  const btnRegister = document.getElementById('tabBtnRegister');
+  const tabBtnLogin = document.getElementById('tabBtnLogin');
+  const tabBtnRegister = document.getElementById('tabBtnRegister');
 
   if (tab === 'login') {
-    loginForm.style.display = 'block';
-    registerForm.style.display = 'none';
-
-    btnLogin.style.background = '#ffffff';
-    btnLogin.style.color = '#1e293b';
-    btnLogin.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-
-    btnRegister.style.background = 'transparent';
-    btnRegister.style.color = '#64748b';
-    btnRegister.style.boxShadow = 'none';
+    if (loginForm) loginForm.style.display = 'block';
+    if (registerForm) registerForm.style.display = 'none';
+    if (tabBtnLogin) tabBtnLogin.classList.add('active');
+    if (tabBtnRegister) tabBtnRegister.classList.remove('active');
   } else {
-    loginForm.style.display = 'none';
-    registerForm.style.display = 'block';
+    if (loginForm) loginForm.style.display = 'none';
+    if (registerForm) registerForm.style.display = 'block';
+    if (tabBtnRegister) tabBtnRegister.classList.add('active');
+    if (tabBtnLogin) tabBtnLogin.classList.remove('active');
+  }
+}
 
-    btnRegister.style.background = '#ffffff';
-    btnRegister.style.color = '#1e293b';
-    btnRegister.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+function updateAuthenticatedUI() {
+  const emp = state.currentEmployee;
+  if (!emp) return updateUnauthenticatedUI();
 
-    btnLogin.style.background = 'transparent';
-    btnLogin.style.color = '#64748b';
-    btnLogin.style.boxShadow = 'none';
+  // Hide Auth Card, Show Punch View
+  document.getElementById('authCardSection').style.display = 'none';
+  document.getElementById('punchTab').style.display = 'block';
+
+  // Header Pill
+  const pill = document.getElementById('userInfoPill');
+  const roleBadge = document.getElementById('userRoleBadge');
+  const userName = document.getElementById('currentUserName');
+  const btnAuth = document.getElementById('btnLoginLogout');
+  const btnPasskey = document.getElementById('btnRegisterPasskey');
+
+  if (pill) pill.style.display = 'flex';
+  if (roleBadge) roleBadge.textContent = emp.role === 'admin' ? 'CHIEF ADMIN' : 'STAFF';
+  if (userName) userName.textContent = emp.name;
+  if (btnAuth) btnAuth.textContent = '🚪 Logout';
+  if (btnPasskey) btnPasskey.style.display = state.hasPasskey ? 'none' : 'inline-flex';
+
+  // Greeting
+  document.getElementById('greetingTitle').textContent = `Good Day, ${emp.name}`;
+  document.getElementById('greetingSub').textContent = `Employee ID: ${emp.id} • ${emp.email}`;
+
+  // Shift Info
+  if (state.shifts && state.shifts.length > 0) {
+    const s = state.shifts[0];
+    document.getElementById('assignedShiftName').textContent = s.shift_name;
+    document.getElementById('assignedShiftTime').textContent = `${s.start_time} – ${s.end_time}`;
+  }
+
+  // Punch Action Button & Status Badge
+  const statusBadge = document.getElementById('attendanceStatusBadge');
+  const statusText = document.getElementById('statusText');
+  const btnPunch = document.getElementById('btnPunchMain');
+  const btnIcon = document.getElementById('btnIcon');
+  const btnLabel = document.getElementById('btnLabel');
+
+  const summaryCheckIn = document.getElementById('summaryCheckIn');
+  const summaryCheckOut = document.getElementById('summaryCheckOut');
+  const summaryPasskey = document.getElementById('summaryPasskey');
+
+  if (summaryPasskey) {
+    summaryPasskey.textContent = state.hasPasskey ? 'Active Passkey 🔑' : 'Not Registered';
+    summaryPasskey.style.color = state.hasPasskey ? 'var(--accent-emerald)' : 'var(--accent-amber)';
+  }
+
+  if (emp.current_punch_status === 'CHECKED_IN') {
+    statusBadge.className = 'attendance-status-badge active-in';
+    statusText.textContent = 'Currently Checked In';
+    if (summaryCheckIn) summaryCheckIn.textContent = formatTimeOnly(emp.last_punch_time);
+
+    btnPunch.style.display = 'inline-flex';
+    btnPunch.className = 'btn-punch-main out';
+    btnIcon.textContent = '👆';
+    btnLabel.textContent = 'PUNCH OUT';
+  } else if (emp.current_punch_status === 'CHECKED_OUT') {
+    statusBadge.className = 'attendance-status-badge completed';
+    statusText.textContent = 'Shift Completed (Checked Out)';
+    if (summaryCheckOut) summaryCheckOut.textContent = formatTimeOnly(emp.last_punch_time);
+
+    btnPunch.style.display = 'none';
+  } else {
+    statusBadge.className = 'attendance-status-badge ready';
+    statusText.textContent = 'Ready to Punch In';
+    if (summaryCheckIn) summaryCheckIn.textContent = '--';
+    if (summaryCheckOut) summaryCheckOut.textContent = '--';
+
+    btnPunch.style.display = 'inline-flex';
+    btnPunch.className = 'btn-punch-main in';
+    btnIcon.textContent = '👇';
+    btnLabel.textContent = 'PUNCH IN';
+  }
+}
+
+function updateUnauthenticatedUI() {
+  document.getElementById('authCardSection').style.display = 'block';
+  document.getElementById('punchTab').style.display = 'none';
+
+  const pill = document.getElementById('userInfoPill');
+  const btnAuth = document.getElementById('btnLoginLogout');
+  const btnPasskey = document.getElementById('btnRegisterPasskey');
+
+  if (pill) pill.style.display = 'none';
+  if (btnPasskey) btnPasskey.style.display = 'none';
+  if (btnAuth) btnAuth.textContent = '🔑 Login';
+}
+
+function formatTimeOnly(isoStr) {
+  if (!isoStr) return '--';
+  try {
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return '--';
   }
 }
 
 function fillQuickLogin(email, password) {
+  switchAuthTab('login');
   document.getElementById('loginIdentifier').value = email;
   document.getElementById('loginPassword').value = password;
-  switchAuthTab('login');
 }
 
 // -------------------------------------------------------------
-// WEBAUTHN PASSKEY REGISTRATION & MODAL
+// AUTHENTICATION HANDLERS
 // -------------------------------------------------------------
-function openPasskeyPromptModal() {
-  const modal = document.getElementById('passkeyPromptModal');
-  if (modal) modal.classList.add('active');
+
+async function handleStaffLoginForm(event) {
+  event.preventDefault();
+  const identifier = document.getElementById('loginIdentifier').value.trim();
+  const password = document.getElementById('loginPassword').value;
+
+  if (!identifier || !password) {
+    return showAlert('Please enter your Employee ID / Email and Password.', 'error');
+  }
+
+  showAlert('Verifying credentials...', 'info');
+
+  const payload = identifier.includes('@') ? { email: identifier, password } : { employeeId: identifier, password };
+  const { status, data } = await safeFetchJson('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (status === 200 && data.success) {
+    showAlert('Login successful!', 'success');
+    await checkActiveSession();
+  } else {
+    showAlert(`Login failed: ${data.error || 'Invalid credentials'}`, 'error');
+  }
 }
 
-function closePasskeyPromptModal() {
-  const modal = document.getElementById('passkeyPromptModal');
-  if (modal) modal.classList.remove('active');
+async function handleStaffRegisterForm(event) {
+  event.preventDefault();
+  const name = document.getElementById('regName').value.trim();
+  const employeeId = document.getElementById('regEmpId').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const role = document.getElementById('regRole').value;
+
+  if (!name || !employeeId || !email || !password) {
+    return showAlert('All fields are required for account setup.', 'error');
+  }
+
+  showAlert('Registering account...', 'info');
+
+  const { status, data } = await safeFetchJson('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, employeeId, email, password, role })
+  });
+
+  if (status === 200 && data.success) {
+    showAlert('Account registered and logged in successfully!', 'success');
+    await checkActiveSession();
+  } else {
+    showAlert(`Registration failed: ${data.error || 'Server error'}`, 'error');
+  }
 }
 
-async function registerWebAuthnPasskey() {
-  if (!state.currentEmployee) return switchAuthTab('login');
-
-  try {
-    showAlert('Requesting passkey registration options from server...', 'info');
-    const { status, data: optData } = await safeFetchJson('/api/webauthn/register-options');
-
-    if (status === 401 || !optData.success) {
-      if (status === 401 || (optData && optData.reasonCode === 'UNAUTHENTICATED')) {
-        state.currentEmployee = null;
-        updateUnauthenticatedUI();
-        switchAuthTab('login');
-        return showAlert('Session expired. Please log in first.', 'info');
-      }
-      throw new Error((optData && optData.error) || 'Failed to get registration options');
-    }
-
-    showAlert('Please authenticate on your device (Face ID / Fingerprint / Device Lock)...', 'info');
-
-    // Call Dual-Engine Registration Helper (SimpleWebAuthn + Native Fallback)
-    const credential = await webAuthnRegister(optData.options);
-
-    const { status: vStatus, data: verifyData } = await safeFetchJson('/api/webauthn/register-verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        challengeId: optData.challengeId,
-        credential
-      })
-    });
-
-    if (vStatus === 200 && verifyData.success) {
-      state.hasPasskey = true;
-      if (document.getElementById('summaryPasskey')) {
-        document.getElementById('summaryPasskey').textContent = '✓ Passkey Registered';
-      }
-      closePasskeyPromptModal();
-      showAlert('🎉 Biometric WebAuthn Passkey registered successfully! You can now Punch Attendance.', 'success');
-      await checkAuthSession();
-    } else {
-      if (vStatus === 401 || (verifyData && verifyData.reasonCode === 'UNAUTHENTICATED')) {
-        state.currentEmployee = null;
-        updateUnauthenticatedUI();
-        switchAuthTab('login');
-        return showAlert('Session expired during passkey registration. Please log in again.', 'info');
-      }
-      throw new Error((verifyData && verifyData.error) || 'Passkey registration verification failed');
-    }
-  } catch (err) {
-    const formattedError = formatWebAuthnErrorMessage(err);
-    showAlert(`Passkey Error: ${formattedError}`, 'error');
+async function handleAuthAction() {
+  if (state.currentEmployee) {
+    await safeFetchJson('/api/auth/logout', { method: 'POST' });
+    state.currentEmployee = null;
+    updateUnauthenticatedUI();
+    showAlert('Logged out successfully.', 'info');
+  } else {
+    switchAuthTab('login');
   }
 }
 
 // -------------------------------------------------------------
-// FRESH LOCATION REQUEST
+// WEBAUTHN PASSKEY REGISTRATION & AUTHENTICATION (FIDO2)
 // -------------------------------------------------------------
-function requestFreshLocation() {
-  return new Promise((resolve, reject) => {
+
+async function registerWebAuthnPasskey() {
+  if (!state.currentEmployee) return switchAuthTab('login');
+
+  closePasskeyPromptModal();
+  showAlert('Initializing biometric passkey setup...', 'info');
+
+  try {
+    const { data: optData } = await safeFetchJson('/api/webauthn/register-options');
+    if (!optData.success) {
+      throw new Error(optData.error || 'Failed to initialize WebAuthn passkey registration.');
+    }
+
+    let credentialResponse = null;
+    if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startRegistration === 'function') {
+      credentialResponse = await window.SimpleWebAuthnBrowser.startRegistration(optData.options);
+    } else {
+      throw new Error('WebAuthn browser library not loaded. Use a supported browser (Chrome, Safari, Edge).');
+    }
+
+    showAlert('Verifying passkey signature on server...', 'info');
+
+    const { data: verData } = await safeFetchJson('/api/webauthn/register-verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challengeId: optData.challengeId,
+        credential: credentialResponse
+      })
+    });
+
+    if (verData.success && verData.verified) {
+      state.hasPasskey = true;
+      updateAuthenticatedUI();
+      showAlert('🎉 Biometric Passkey registered successfully!', 'success');
+    } else {
+      throw new Error(verData.error || 'Passkey verification failed.');
+    }
+  } catch (err) {
+    console.error('WebAuthn Registration Error:', err);
+    showAlert(`Passkey Error: ${err.message || 'Passkey registration cancelled.'}`, 'error');
+  }
+}
+
+async function webAuthnAuthenticate(options) {
+  if (window.SimpleWebAuthnBrowser && typeof window.SimpleWebAuthnBrowser.startAuthentication === 'function') {
+    return await window.SimpleWebAuthnBrowser.startAuthentication(options);
+  }
+  throw new Error('WebAuthn browser library unavailable.');
+}
+
+function formatWebAuthnErrorMessage(err) {
+  const msg = err.message || String(err);
+  if (msg.includes('cancelled') || msg.includes('canceled') || msg.includes('NotAllowedError')) {
+    return 'Biometric prompt was cancelled or timed out.';
+  }
+  if (msg.includes('SecurityError') || msg.includes('domain')) {
+    return 'Domain mismatch for WebAuthn passkey.';
+  }
+  return msg;
+}
+
+// -------------------------------------------------------------
+// MULTI-SAMPLE GPS LOCATION ENGINE (REQUIREMENT 3 & 4)
+// -------------------------------------------------------------
+async function requestFreshLocation(sampleCount = 3, timeoutMs = 10000) {
+  currentLocation = null;
+
+  return new Promise(async (resolve, reject) => {
     if (!('geolocation' in navigator)) {
       return reject(new Error('LOCATION_REQUIRED: Browser does not support geolocation.'));
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        resolve({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy
+    const samples = [];
+    const perSampleTimeout = Math.max(2500, Math.floor(timeoutMs / sampleCount));
+
+    for (let i = 0; i < sampleCount; i++) {
+      try {
+        const pos = await new Promise((res, rej) => {
+          const timer = setTimeout(() => rej(new Error('Location sample timeout')), perSampleTimeout);
+          navigator.geolocation.getCurrentPosition(
+            (p) => {
+              clearTimeout(timer);
+              res(p);
+            },
+            (err) => {
+              clearTimeout(timer);
+              rej(err);
+            },
+            { enableHighAccuracy: true, timeout: perSampleTimeout, maximumAge: 0 }
+          );
         });
-      },
-      (err) => {
-        reject(new Error(`LOCATION_REQUIRED: ${err.message || 'GPS location permission denied.'}`));
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+
+        if (pos && pos.coords && typeof pos.coords.latitude === 'number' && pos.coords.accuracy > 0) {
+          samples.push({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy
+          });
+        }
+      } catch (e) {
+        // Continue to next sample attempt
+      }
+    }
+
+    if (samples.length === 0) {
+      return reject(new Error('We could not obtain an accurate location. Please ensure GPS is enabled and try again.'));
+    }
+
+    // Select the best quality sample (lowest accuracy uncertainty number)
+    samples.sort((a, b) => a.accuracy - b.accuracy);
+    currentLocation = samples[0];
+    resolve(currentLocation);
   });
 }
 
@@ -608,20 +496,20 @@ async function initiateHighTrustPunch() {
     }
 
     // -------------------------------------------------------------
-    // STEP 3: Strict Authoritative GPS Geofence Check
+    // STEP 3: Strict Authoritative GPS Geofence Check (Multi-Sample)
     // -------------------------------------------------------------
-    updateProgressStep('stepLocation', 'active', 'Requesting fresh browser GPS location...');
+    updateProgressStep('stepLocation', 'active', 'Collecting fresh high-accuracy GPS samples...');
 
     let locationEvidence = null;
     try {
-      locationEvidence = await requestFreshLocation();
+      locationEvidence = await requestFreshLocation(3, 10000);
     } catch (locErr) {
       updateProgressStep('stepLocation', 'failed', 'GPS Location Failed');
       showModalFooter();
       throw locErr;
     }
 
-    updateProgressStep('stepLocation', 'success', `✓ Fresh Location (±${Math.round(locationEvidence.accuracy)}m)`);
+    updateProgressStep('stepLocation', 'success', `✓ Best GPS Sample (±${Math.round(locationEvidence.accuracy)}m)`);
 
     // -------------------------------------------------------------
     // STEP 4: Shift Window & State Validation
@@ -654,21 +542,25 @@ async function initiateHighTrustPunch() {
       state.currentEmployee.current_punch_status = punchData.currentPunchStatus;
       state.currentEmployee.last_punch_time = punchData.serverTimestamp;
       updateAuthenticatedUI();
-      showAlert(`🎉 ${punchData.message}`, 'success');
+      showAlert(`🎉 ${punchData.message} [Ref: ${punchData.correlationId}]`, 'success');
     } else {
       showModalFooter();
 
       if (punchData.reasonCode === 'INVALID_NETWORK') {
         updateProgressStep('stepNetwork', 'failed', '❌ Unauthorized Network IP');
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode}`);
-        showAlert(`❌ Network Security Rejection: Connect to Hospital Wi-Fi!`, 'error');
-      } else if (punchData.reasonCode === 'OUTSIDE_GEOFENCE' || punchData.reasonCode === 'LOCATION_ACCURACY_TOO_LOW') {
-        updateProgressStep('stepLocation', 'failed', `❌ Geofence/Accuracy Failure`);
-        updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode}`);
-        showAlert(`❌ ${punchData.error}`, 'error');
+        showAlert(`❌ Network Security Rejection: Connect to Hospital Wi-Fi! [Ref: ${punchData.correlationId || 'ATT'}]`, 'error');
+      } else if (punchData.reasonCode === 'BORDERLINE_LOCATION_RETRY' || punchData.reasonCode === 'LOCATION_ACCURACY_TOO_LOW') {
+        updateProgressStep('stepLocation', 'warning', `⚠️ GPS Accuracy / Borderline Retry Required`);
+        updateProgressStep('stepRecord', 'failed', `Retry Required [Ref: ${punchData.correlationId}]`);
+        showAlert(`⚠️ ${punchData.error} [Reference: ${punchData.correlationId}]`, 'warning');
+      } else if (punchData.reasonCode === 'OUTSIDE_GEOFENCE') {
+        updateProgressStep('stepLocation', 'failed', `❌ Geofence Boundary Failure`);
+        updateProgressStep('stepRecord', 'failed', `Rejected: OUTSIDE_GEOFENCE`);
+        showAlert(`❌ ${punchData.error} [Reference: ${punchData.correlationId}]`, 'error');
       } else {
         updateProgressStep('stepRecord', 'failed', `Rejected: ${punchData.reasonCode || 'Validation Failed'}`);
-        showAlert(`❌ ${punchData.error}`, 'error');
+        showAlert(`❌ ${punchData.error} [Reference: ${punchData.correlationId}]`, 'error');
       }
     }
 
@@ -698,127 +590,49 @@ function openProgressModal(action) {
   });
 
   document.getElementById('modalFooter').style.display = 'none';
-  modal.classList.add('active');
+  if (modal) modal.style.display = 'flex';
 }
 
-function updateProgressStep(stepId, status, labelText) {
+function updateProgressStep(stepId, status, message) {
   const el = document.getElementById(stepId);
   if (!el) return;
-  el.className = `progress-step-item ${status}`;
-  const icon = el.querySelector('.step-icon');
-  if (status === 'success' && icon) icon.textContent = '✓';
-  else if (status === 'failed' && icon) icon.textContent = '❌';
-  else if (icon) icon.textContent = '⏳';
 
-  if (labelText) {
-    const span = el.querySelector('span:nth-child(2)');
-    if (span) span.textContent = labelText;
+  const icon = el.querySelector('.step-icon');
+  const text = el.querySelector('span:last-child');
+
+  if (status === 'active') {
+    el.className = 'progress-step-item active';
+    if (icon) icon.textContent = '🔄';
+  } else if (status === 'success') {
+    el.className = 'progress-step-item success';
+    if (icon) icon.textContent = '✓';
+  } else if (status === 'warning') {
+    el.className = 'progress-step-item warning';
+    if (icon) icon.textContent = '⚠️';
+  } else if (status === 'failed') {
+    el.className = 'progress-step-item failed';
+    if (icon) icon.textContent = '❌';
   }
+
+  if (message && text) text.textContent = message;
 }
 
 function showModalFooter() {
-  document.getElementById('modalFooter').style.display = 'block';
+  const footer = document.getElementById('modalFooter');
+  if (footer) footer.style.display = 'block';
 }
 
 function closeProgressModal() {
-  document.getElementById('progressModal').classList.remove('active');
+  const modal = document.getElementById('progressModal');
+  if (modal) modal.style.display = 'none';
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function openPasskeyPromptModal() {
+  const modal = document.getElementById('passkeyPromptModal');
+  if (modal) modal.style.display = 'flex';
 }
 
-// Banner Alert
-function showAlert(msg, type = 'success') {
-  const alert = document.getElementById('globalAlert');
-  if (!alert) return;
-  alert.textContent = msg;
-  alert.className = `alert-banner show ${type}`;
-  setTimeout(() => {
-    alert.className = 'alert-banner';
-  }, 5000);
-}
-
-// -------------------------------------------------------------
-// AUTH FORM HANDLERS
-// -------------------------------------------------------------
-function handleAuthAction() {
-  if (state.currentEmployee) {
-    performStaffLogout();
-  } else {
-    switchAuthTab('login');
-  }
-}
-
-async function handleStaffLoginForm(event) {
-  event.preventDefault();
-  const identifier = document.getElementById('loginIdentifier').value.trim();
-  const password = document.getElementById('loginPassword').value;
-
-  if (!identifier || !password) {
-    return showAlert('Please enter employee ID/email and password', 'error');
-  }
-
-  try {
-    const isEmail = identifier.includes('@');
-    const body = isEmail ? { email: identifier, password } : { employeeId: identifier, password };
-
-    const { data } = await safeFetchJson('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (data.success) {
-      document.getElementById('loginPassword').value = '';
-      showAlert(`✓ Logged in successfully as ${data.employee.name}`, 'success');
-      await checkAuthSession();
-    } else {
-      showAlert(`Login failed: ${data.error || 'Invalid credentials'}`, 'error');
-    }
-  } catch (err) {
-    showAlert(`Login error: ${err.message}`, 'error');
-  }
-}
-
-async function handleStaffRegisterForm(event) {
-  event.preventDefault();
-  const name = document.getElementById('regName').value.trim();
-  const employeeId = document.getElementById('regEmpId').value.trim();
-  const email = document.getElementById('regEmail').value.trim();
-  const password = document.getElementById('regPassword').value;
-  const role = document.getElementById('regRole').value;
-
-  if (!name || !employeeId || !email || !password) {
-    return showAlert('All fields are required for staff account registration', 'error');
-  }
-
-  try {
-    const { data } = await safeFetchJson('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, employeeId, email, password, role })
-    });
-
-    if (data.success) {
-      document.getElementById('regPassword').value = '';
-      showAlert(`🎉 Account created! Logged in as ${data.employee.name}`, 'success');
-      await checkAuthSession();
-    } else {
-      showAlert(`Registration failed: ${data.error || 'Could not create account'}`, 'error');
-    }
-  } catch (err) {
-    showAlert(`Registration error: ${err.message}`, 'error');
-  }
-}
-
-async function performStaffLogout() {
-  try {
-    await safeFetchJson('/api/auth/logout', { method: 'POST' });
-    state.currentEmployee = null;
-    updateUnauthenticatedUI();
-    showAlert('Logged out successfully', 'info');
-  } catch (err) {
-    showAlert('Logout error: ' + err.message, 'error');
-  }
+function closePasskeyPromptModal() {
+  const modal = document.getElementById('passkeyPromptModal');
+  if (modal) modal.style.display = 'none';
 }

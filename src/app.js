@@ -42,7 +42,14 @@ function toBufferFromBase64Url(input) {
   return Buffer.from(String(input), 'utf8');
 }
 
-// Trusted Client IP Extractor (Vercel Proxy Aware)
+// Unique Correlation ID Generator (ATT-YYYYMMDD-XXXXXX)
+function generateCorrelationId() {
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const randStr = crypto.randomBytes(3).toString('hex').toUpperCase();
+  return `ATT-${dateStr}-${randStr}`;
+}
+
+// Trusted Client IP Extractor (Vercel Proxy Aware & IPv4/IPv6 Normalizer)
 function getTrustedClientIp(req) {
   const xForwardedFor = req.headers['x-forwarded-for'];
   if (xForwardedFor) {
@@ -137,6 +144,107 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+// -------------------------------------------------------------
+// UNIFIED PHYSICAL PRESENCE EVALUATOR (NETWORK & LOCATION SIGNALS)
+// -------------------------------------------------------------
+function evaluatePhysicalPresence({ clientIp, location, settings }) {
+  const allowedIps = (settings && settings.hospital_wifi_ips) || process.env.HOSPITAL_ALLOWED_PUBLIC_IPS || ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
+  const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || (settings && settings.network_enforcement_mode) || 'enforce';
+
+  const isNetworkApproved = isApprovedHospitalNetwork(clientIp, allowedIps);
+  const networkPassed = networkMode !== 'enforce' || isNetworkApproved;
+
+  const networkResult = {
+    passed: networkPassed,
+    detectedIp: clientIp || '0.0.0.0',
+    reason: networkPassed ? 'Approved Hospital Egress Network' : `Unauthorized Egress IP (${clientIp}). Connect to approved Hospital Wi-Fi.`
+  };
+
+  if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number' || typeof location.accuracy !== 'number') {
+    return {
+      network: networkResult,
+      location: {
+        passed: false,
+        retryRequired: true,
+        distanceMeters: null,
+        accuracyMeters: null,
+        reason: 'Fresh GPS location evidence required. Please remain at the hospital and try again.'
+      },
+      overallPassed: false
+    };
+  }
+
+  const { lat, lng, accuracy } = location;
+
+  if (isNaN(lat) || isNaN(lng) || isNaN(accuracy) || !isFinite(lat) || !isFinite(lng) || !isFinite(accuracy) || lat < -90 || lat > 90 || lng < -180 || lng > 180 || accuracy <= 0) {
+    return {
+      network: networkResult,
+      location: {
+        passed: false,
+        retryRequired: true,
+        distanceMeters: null,
+        accuracyMeters: accuracy || null,
+        reason: 'Invalid GPS coordinates payload. Please try again.'
+      },
+      overallPassed: false
+    };
+  }
+
+  const hospitalLat = parseFloat(process.env.HOSPITAL_LAT) || parseFloat(settings && settings.geofence_lat) || 8.752625;
+  const hospitalLng = parseFloat(process.env.HOSPITAL_LNG) || parseFloat(settings && settings.geofence_lng) || 76.938625;
+  
+  // Strictly enforce GEOFENCE_RADIUS_METERS without any Math.max(radius, 500) fallback!
+  const geofenceRadiusMeters = parseFloat(process.env.GEOFENCE_RADIUS_METERS) || parseFloat(settings && settings.geofence_radius_meters) || 500;
+  const maxAccuracyMeters = parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || parseFloat(settings && settings.max_allowed_accuracy_meters) || 300;
+  const strictGeofenceMode = process.env.STRICT_GEOFENCE_MODE ? process.env.STRICT_GEOFENCE_MODE === 'true' : (settings && settings.enforcement_strict_geofence !== 0);
+
+  const distanceMeters = calculateHaversineDistance(lat, lng, hospitalLat, hospitalLng);
+  const roundedDistance = Math.round(distanceMeters);
+  const roundedAccuracy = Math.round(accuracy);
+
+  let locationPassed = false;
+  let retryRequired = false;
+  let locationReason = '';
+
+  // 1. Accuracy Check
+  if (roundedAccuracy > maxAccuracyMeters) {
+    locationPassed = false;
+    retryRequired = true;
+    locationReason = `GPS location accuracy ±${roundedAccuracy}m is too low (maximum allowed is ±${maxAccuracyMeters}m). Please move to an open area and try again.`;
+  }
+  // 2. Geofence Distance Check
+  else if (distanceMeters > geofenceRadiusMeters) {
+    locationPassed = false;
+    retryRequired = false; // Clearly outside boundary -> FAIL
+    locationReason = `Distance ${roundedDistance}m exceeds hospital geofence boundary (${geofenceRadiusMeters}m).`;
+  }
+  // 3. Strict Borderline Boundary Check (Distance + Accuracy Uncertainty)
+  else if (strictGeofenceMode && (distanceMeters + (accuracy / 2)) > (geofenceRadiusMeters + (maxAccuracyMeters / 4))) {
+    locationPassed = false;
+    retryRequired = true; // Borderline location -> RETRY
+    locationReason = `Borderline location detected (${roundedDistance}m distance with ±${roundedAccuracy}m uncertainty). Please move closer to the hospital center and try again.`;
+  }
+  else {
+    locationPassed = true;
+    retryRequired = false;
+    locationReason = `Verified inside hospital geofence (${roundedDistance}m away, ±${roundedAccuracy}m accuracy).`;
+  }
+
+  const locationResult = {
+    passed: locationPassed,
+    retryRequired,
+    distanceMeters: roundedDistance,
+    accuracyMeters: roundedAccuracy,
+    reason: locationReason
+  };
+
+  return {
+    network: networkResult,
+    location: locationResult,
+    overallPassed: networkResult.passed && locationResult.passed
+  };
+}
+
 function timeStrToMinutes(timeStr) {
   if (!timeStr) return 0;
   const [h, m] = timeStr.split(':').map(Number);
@@ -168,9 +276,10 @@ async function recordAttendanceAttempt({
   distance,
   authenticationVerified,
   reasonCode,
-  result
+  result,
+  correlationId
 }) {
-  const id = 'att_attempt_' + crypto.randomUUID();
+  const id = correlationId || generateCorrelationId();
   const serverTimestamp = new Date().toISOString();
 
   await queryRun(
@@ -194,6 +303,8 @@ async function recordAttendanceAttempt({
       result
     ]
   );
+
+  return id;
 }
 
 // Production Authentication Middleware
@@ -514,6 +625,72 @@ app.get('/api/my-ip', async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
+// ADMIN PILOT CALIBRATION & DIAGNOSTIC ENDPOINTS
+// -------------------------------------------------------------
+
+app.get('/api/admin/network-diagnostics', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const clientIp = getTrustedClientIp(req);
+    const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
+    let allowedIps = [];
+    try {
+      allowedIps = typeof settings.hospital_wifi_ips === 'string' ? JSON.parse(settings.hospital_wifi_ips) : (settings.hospital_wifi_ips || []);
+    } catch (e) {
+      allowedIps = ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
+    }
+
+    const isApproved = isApprovedHospitalNetwork(clientIp, allowedIps);
+    res.json({
+      success: true,
+      detectedClientIp: clientIp,
+      configuredHospitalIps: allowedIps,
+      isApproved,
+      networkEnforcementMode: process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'enforce',
+      serverTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/admin/calibrate-debug', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const clientIp = getTrustedClientIp(req);
+    const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
+
+    const reqLat = req.query.lat ? parseFloat(req.query.lat) : null;
+    const reqLng = req.query.lng ? parseFloat(req.query.lng) : null;
+    const reqAcc = req.query.accuracy ? parseFloat(req.query.accuracy) : null;
+
+    let presenceEvaluation = null;
+    if (reqLat !== null && reqLng !== null && reqAcc !== null) {
+      presenceEvaluation = evaluatePhysicalPresence({
+        clientIp,
+        location: { lat: reqLat, lng: reqLng, accuracy: reqAcc },
+        settings
+      });
+    }
+
+    res.json({
+      success: true,
+      serverTimestamp: new Date().toISOString(),
+      detectedClientIp: clientIp,
+      settings: {
+        geofence_lat: parseFloat(process.env.HOSPITAL_LAT) || settings.geofence_lat || 8.752625,
+        geofence_lng: parseFloat(process.env.HOSPITAL_LNG) || settings.geofence_lng || 76.938625,
+        geofence_radius_meters: parseFloat(process.env.GEOFENCE_RADIUS_METERS) || settings.geofence_radius_meters || 500,
+        max_allowed_accuracy_meters: parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || settings.max_allowed_accuracy_meters || 300,
+        hospital_wifi_ips: settings.hospital_wifi_ips,
+        network_enforcement_mode: process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'enforce'
+      },
+      evaluation: presenceEvaluation
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
   try {
     const current = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
@@ -784,13 +961,13 @@ async function getOrCreateShiftInstance(employeeId) {
 // MAIN HIGH-TRUST PUNCH IN / PUNCH OUT ENDPOINT
 app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res) => {
   const serverTimestamp = new Date().toISOString(); // OFFICIAL SERVER TIMESTAMP
+  const correlationId = generateCorrelationId();
   const clientIp = getTrustedClientIp(req);
   const employee = req.user;
 
   const { punchType, location, challengeId, credential } = req.body;
 
   let shiftInstanceId = null;
-  let distanceMeters = null;
 
   try {
     // -------------------------------------------------------------
@@ -798,6 +975,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     // -------------------------------------------------------------
     if (!punchType || (punchType !== 'CHECK_IN' && punchType !== 'CHECK_OUT')) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
@@ -806,6 +984,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'SERVER_VALIDATION_FAILED',
         error: 'Attendance request payload incomplete (valid punchType required).'
       });
@@ -816,6 +995,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     // -------------------------------------------------------------
     if (!challengeId) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
@@ -824,6 +1004,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'CHALLENGE_EXPIRED',
         error: 'Missing security challenge token. Please try again.'
       });
@@ -833,15 +1014,17 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
     if (!challengeRow) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
         reasonCode: 'CHALLENGE_EXPIRED',
         result: 'REJECTED'
       });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'SECURITY_SUSPICIOUS', 'CHALLENGE_EXPIRED', 'Challenge token not found');
+      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'SECURITY_SUSPICIOUS', 'CHALLENGE_EXPIRED', 'Challenge token not found', { correlationId });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'CHALLENGE_EXPIRED',
         error: 'Security challenge session expired. Please tap Punch again.'
       });
@@ -849,15 +1032,17 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
     if (Number(challengeRow.used) === 1) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
         reasonCode: 'CHALLENGE_ALREADY_USED',
         result: 'REJECTED'
       });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'SECURITY_SUSPICIOUS', 'CHALLENGE_ALREADY_USED', 'Replay attempt detected for security challenge');
+      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'SECURITY_SUSPICIOUS', 'CHALLENGE_ALREADY_USED', 'Replay attempt detected for security challenge', { correlationId });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'CHALLENGE_ALREADY_USED',
         error: 'Security challenge token was already consumed. Replay rejected.'
       });
@@ -865,15 +1050,17 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
     if (challengeRow.employee_id !== employee.id || challengeRow.action !== punchType) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
         reasonCode: 'AUTHENTICATION_FAILED',
         result: 'REJECTED'
       });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'Challenge owner or action mismatch');
+      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'Challenge owner or action mismatch', { correlationId });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'AUTHENTICATION_FAILED',
         error: 'Security challenge mismatch. Action rejected.'
       });
@@ -881,15 +1068,17 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
     if (Number(challengeRow.expires_at) < Date.now()) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
         reasonCode: 'CHALLENGE_EXPIRED',
         result: 'REJECTED'
       });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'WARNING', 'CHALLENGE_EXPIRED', 'Challenge expired before punch consumption');
+      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_SECURITY', 'WARNING', 'CHALLENGE_EXPIRED', 'Challenge expired before punch consumption', { correlationId });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'CHALLENGE_EXPIRED',
         error: 'Security challenge timed out. Please try again.'
       });
@@ -927,15 +1116,17 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
       if (!storedCredential) {
         await recordAttendanceAttempt({
+          correlationId,
           employeeId: employee.id,
           action: punchType,
           sourceIp: clientIp,
           reasonCode: 'AUTHENTICATION_FAILED',
           result: 'REJECTED'
         });
-        await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_WEBAUTHN', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'WebAuthn credential not found or inactive');
+        await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_WEBAUTHN', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'WebAuthn credential not found or inactive', { correlationId });
         return res.status(400).json({
           success: false,
+          correlationId,
           reasonCode: 'AUTHENTICATION_FAILED',
           error: 'WebAuthn passkey not registered for this employee.'
         });
@@ -976,15 +1167,17 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
         if (!authVerification.verified) {
           await recordAttendanceAttempt({
+            correlationId,
             employeeId: employee.id,
             action: punchType,
             sourceIp: clientIp,
             reasonCode: 'AUTHENTICATION_FAILED',
             result: 'REJECTED'
           });
-          await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_WEBAUTHN', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'WebAuthn signature verification failed');
+          await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_WEBAUTHN', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'WebAuthn signature verification failed', { correlationId });
           return res.status(400).json({
             success: false,
+            correlationId,
             reasonCode: 'AUTHENTICATION_FAILED',
             error: 'WebAuthn passkey biometric verification failed.'
           });
@@ -997,136 +1190,77 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       }
     } else {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
         reasonCode: 'AUTHENTICATION_FAILED',
         result: 'REJECTED'
       });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_WEBAUTHN', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'WebAuthn assertion response missing');
+      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_WEBAUTHN', 'SECURITY_SUSPICIOUS', 'AUTHENTICATION_FAILED', 'WebAuthn assertion response missing', { correlationId });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'AUTHENTICATION_FAILED',
         error: 'WebAuthn biometric passkey verification required.'
       });
     }
 
     // -------------------------------------------------------------
-    // CHECK 4: Approved Hospital Network Verification
+    // UNIFIED CHECK 4 & 5: PHYSICAL PRESENCE (NETWORK + GEOFENCE + ACCURACY)
     // -------------------------------------------------------------
     const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
-    let allowedIps = [];
-    try {
-      allowedIps = typeof settings.hospital_wifi_ips === 'string' ? JSON.parse(settings.hospital_wifi_ips) : settings.hospital_wifi_ips;
-    } catch (e) {
-      allowedIps = ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
-    }
-    if ((!allowedIps || allowedIps.length === 0) && process.env.HOSPITAL_ALLOWED_PUBLIC_IPS) {
-      allowedIps = process.env.HOSPITAL_ALLOWED_PUBLIC_IPS.split(',').map(s => s.trim());
-    }
+    const presenceEval = evaluatePhysicalPresence({ clientIp, location, settings });
 
-    const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || settings.network_enforcement_mode || 'enforce';
-    const isNetworkApproved = isApprovedHospitalNetwork(clientIp, allowedIps);
+    if (!presenceEval.overallPassed) {
+      const netRes = presenceEval.network;
+      const locRes = presenceEval.location;
 
-    if (networkMode === 'enforce' && !isNetworkApproved) {
+      let reasonCode = 'ATTENDANCE_VALIDATION_FAILED';
+      let statusCode = 400;
+      let errorMsg = 'Physical presence verification failed.';
+
+      if (!netRes.passed) {
+        reasonCode = 'INVALID_NETWORK';
+        statusCode = 403;
+        errorMsg = netRes.reason;
+      } else if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number' || typeof location.accuracy !== 'number') {
+        reasonCode = 'LOCATION_REQUIRED';
+        statusCode = 400;
+        errorMsg = locRes.reason || 'Fresh browser location evidence required for attendance.';
+      } else if (locRes.retryRequired) {
+        reasonCode = (locRes.accuracyMeters !== null && locRes.accuracyMeters > (parseFloat(settings.max_allowed_accuracy_meters) || 300)) ? 'LOCATION_ACCURACY_TOO_LOW' : 'BORDERLINE_LOCATION_RETRY';
+        statusCode = 400;
+        errorMsg = locRes.reason;
+      } else if (!locRes.passed) {
+        reasonCode = 'OUTSIDE_GEOFENCE';
+        statusCode = 403;
+        errorMsg = locRes.reason;
+      }
+
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
-        networkVerified: 0,
+        networkVerified: netRes.passed ? 1 : 0,
+        lat: location ? location.lat : null,
+        lng: location ? location.lng : null,
+        accuracy: locRes.accuracyMeters,
+        distance: locRes.distanceMeters,
         authenticationVerified: webauthnVerified ? 1 : 0,
-        reasonCode: 'INVALID_NETWORK',
+        reasonCode,
         result: 'REJECTED'
       });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_NETWORK', 'WARNING', 'INVALID_NETWORK', `Unauthorized network IP: ${clientIp}`);
-      return res.status(403).json({
+
+      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_PRESENCE', 'WARNING', reasonCode, errorMsg, { correlationId, presenceEval });
+
+      return res.status(statusCode).json({
         success: false,
-        reasonCode: 'INVALID_NETWORK',
-        error: `Unauthorized network connection (${clientIp}). Connect to approved hospital Wi-Fi.`
-      });
-    }
-
-    // -------------------------------------------------------------
-    // CHECK 5: Fresh GPS Location & Geofence Verification
-    // -------------------------------------------------------------
-    if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number' || typeof location.accuracy !== 'number') {
-      await recordAttendanceAttempt({
-        employeeId: employee.id,
-        action: punchType,
-        sourceIp: clientIp,
-        networkVerified: isNetworkApproved ? 1 : 0,
-        authenticationVerified: webauthnVerified ? 1 : 0,
-        reasonCode: 'LOCATION_REQUIRED',
-        result: 'REJECTED'
-      });
-      return res.status(400).json({
-        success: false,
-        reasonCode: 'LOCATION_REQUIRED',
-        error: 'Fresh browser location evidence required for attendance.'
-      });
-    }
-
-    const { lat, lng, accuracy } = location;
-
-    if (isNaN(lat) || isNaN(lng) || isNaN(accuracy) || !isFinite(lat) || !isFinite(lng) || !isFinite(accuracy) || lat < -90 || lat > 90 || lng < -180 || lng > 180 || accuracy <= 0) {
-      await recordAttendanceAttempt({
-        employeeId: employee.id,
-        action: punchType,
-        sourceIp: clientIp,
-        networkVerified: isNetworkApproved ? 1 : 0,
-        authenticationVerified: webauthnVerified ? 1 : 0,
-        reasonCode: 'LOCATION_REQUIRED',
-        result: 'REJECTED'
-      });
-      return res.status(400).json({
-        success: false,
-        reasonCode: 'LOCATION_REQUIRED',
-        error: 'Invalid GPS coordinates payload.'
-      });
-    }
-
-    const hospitalLat = parseFloat(process.env.HOSPITAL_LAT) || parseFloat(settings.geofence_lat) || 8.752625;
-    const hospitalLng = parseFloat(process.env.HOSPITAL_LNG) || parseFloat(settings.geofence_lng) || 76.938625;
-    const geofenceRadiusMeters = parseFloat(process.env.GEOFENCE_RADIUS_METERS) || parseFloat(settings.geofence_radius_meters) || 500;
-    const maxAccuracyMeters = parseFloat(process.env.MAX_LOCATION_ACCURACY_METERS) || parseFloat(settings.max_allowed_accuracy_meters) || 300;
-
-    distanceMeters = calculateHaversineDistance(lat, lng, hospitalLat, hospitalLng);
-
-    if (accuracy > maxAccuracyMeters) {
-      await recordAttendanceAttempt({
-        employeeId: employee.id,
-        action: punchType,
-        sourceIp: clientIp,
-        networkVerified: isNetworkApproved ? 1 : 0,
-        lat, lng, accuracy, distance: Math.round(distanceMeters),
-        authenticationVerified: webauthnVerified ? 1 : 0,
-        reasonCode: 'LOCATION_ACCURACY_TOO_LOW',
-        result: 'REJECTED'
-      });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_LOCATION', 'WARNING', 'LOCATION_ACCURACY_TOO_LOW', `GPS accuracy ±${Math.round(accuracy)}m exceeds maximum threshold of ±${maxAccuracyMeters}m`);
-      return res.status(400).json({
-        success: false,
-        reasonCode: 'LOCATION_ACCURACY_TOO_LOW',
-        error: `GPS location accuracy ±${Math.round(accuracy)}m is too low (maximum allowed is ±${maxAccuracyMeters}m). Move to an open area.`
-      });
-    }
-
-    if (distanceMeters > geofenceRadiusMeters) {
-      await recordAttendanceAttempt({
-        employeeId: employee.id,
-        action: punchType,
-        sourceIp: clientIp,
-        networkVerified: isNetworkApproved ? 1 : 0,
-        lat, lng, accuracy, distance: Math.round(distanceMeters),
-        authenticationVerified: webauthnVerified ? 1 : 0,
-        reasonCode: 'OUTSIDE_GEOFENCE',
-        result: 'REJECTED'
-      });
-      await logAuditEvent(employee.id, employee.name, 'PUNCH_FAILED_LOCATION', 'WARNING', 'OUTSIDE_GEOFENCE', `Distance ${Math.round(distanceMeters)}m outside hospital geofence (${geofenceRadiusMeters}m)`);
-      return res.status(403).json({
-        success: false,
-        reasonCode: 'OUTSIDE_GEOFENCE',
-        error: `You are ${Math.round(distanceMeters)} meters away from hospital premises. Attendance allowed within ${geofenceRadiusMeters}m.`
+        correlationId,
+        reasonCode,
+        error: errorMsg,
+        evaluation: presenceEval
       });
     }
 
@@ -1136,17 +1270,22 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     const shiftResult = await getOrCreateShiftInstance(employee.id);
     if (!shiftResult) {
       await recordAttendanceAttempt({
+        correlationId,
         employeeId: employee.id,
         action: punchType,
         sourceIp: clientIp,
-        networkVerified: isNetworkApproved ? 1 : 0,
-        lat, lng, accuracy, distance: Math.round(distanceMeters),
+        networkVerified: 1,
+        lat: location.lat,
+        lng: location.lng,
+        accuracy: presenceEval.location.accuracyMeters,
+        distance: presenceEval.location.distanceMeters,
         authenticationVerified: webauthnVerified ? 1 : 0,
         reasonCode: 'NO_ACTIVE_SHIFT',
         result: 'REJECTED'
       });
       return res.status(400).json({
         success: false,
+        correlationId,
         reasonCode: 'NO_ACTIVE_SHIFT',
         error: 'No active shift assigned to employee today. Contact HR/Admin.'
       });
@@ -1159,18 +1298,23 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     if (punchType === 'CHECK_IN') {
       if (instance.attendance_state === 'CHECKED_IN') {
         await recordAttendanceAttempt({
+          correlationId,
           employeeId: employee.id,
           shiftInstanceId: instance.id,
           action: punchType,
           sourceIp: clientIp,
-          networkVerified: isNetworkApproved ? 1 : 0,
-          lat, lng, accuracy, distance: Math.round(distanceMeters),
+          networkVerified: 1,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: presenceEval.location.accuracyMeters,
+          distance: presenceEval.location.distanceMeters,
           authenticationVerified: webauthnVerified ? 1 : 0,
           reasonCode: 'DUPLICATE_CHECK_IN',
           result: 'REJECTED'
         });
         return res.status(400).json({
           success: false,
+          correlationId,
           reasonCode: 'DUPLICATE_CHECK_IN',
           error: 'Employee is already Checked In for this shift.'
         });
@@ -1178,18 +1322,23 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
       if (instance.attendance_state === 'CHECKED_OUT') {
         await recordAttendanceAttempt({
+          correlationId,
           employeeId: employee.id,
           shiftInstanceId: instance.id,
           action: punchType,
           sourceIp: clientIp,
-          networkVerified: isNetworkApproved ? 1 : 0,
-          lat, lng, accuracy, distance: Math.round(distanceMeters),
+          networkVerified: 1,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: presenceEval.location.accuracyMeters,
+          distance: presenceEval.location.distanceMeters,
           authenticationVerified: webauthnVerified ? 1 : 0,
           reasonCode: 'SHIFT_ALREADY_COMPLETED',
           result: 'REJECTED'
         });
         return res.status(400).json({
           success: false,
+          correlationId,
           reasonCode: 'SHIFT_ALREADY_COMPLETED',
           error: 'Shift attendance is already completed. Terminal state reached.'
         });
@@ -1197,18 +1346,23 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     } else if (punchType === 'CHECK_OUT') {
       if (instance.attendance_state === 'NOT_STARTED') {
         await recordAttendanceAttempt({
+          correlationId,
           employeeId: employee.id,
           shiftInstanceId: instance.id,
           action: punchType,
           sourceIp: clientIp,
-          networkVerified: isNetworkApproved ? 1 : 0,
-          lat, lng, accuracy, distance: Math.round(distanceMeters),
+          networkVerified: 1,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: presenceEval.location.accuracyMeters,
+          distance: presenceEval.location.distanceMeters,
           authenticationVerified: webauthnVerified ? 1 : 0,
           reasonCode: 'INVALID_ATTENDANCE_STATE',
           result: 'REJECTED'
         });
         return res.status(400).json({
           success: false,
+          correlationId,
           reasonCode: 'INVALID_ATTENDANCE_STATE',
           error: 'Cannot Punch Out before Punch In.'
         });
@@ -1216,18 +1370,23 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
       if (instance.attendance_state === 'CHECKED_OUT') {
         await recordAttendanceAttempt({
+          correlationId,
           employeeId: employee.id,
           shiftInstanceId: instance.id,
           action: punchType,
           sourceIp: clientIp,
-          networkVerified: isNetworkApproved ? 1 : 0,
-          lat, lng, accuracy, distance: Math.round(distanceMeters),
+          networkVerified: 1,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: presenceEval.location.accuracyMeters,
+          distance: presenceEval.location.distanceMeters,
           authenticationVerified: webauthnVerified ? 1 : 0,
           reasonCode: 'DUPLICATE_CHECK_OUT',
           result: 'REJECTED'
         });
         return res.status(400).json({
           success: false,
+          correlationId,
           reasonCode: 'DUPLICATE_CHECK_OUT',
           error: 'Employee is already Checked Out for this shift.'
         });
@@ -1243,7 +1402,7 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
     await queryRun(
       `INSERT INTO attendance_records (
         id, employee_id, shift_instance_id, punch_type, server_timestamp, credential_id, webauthn_verified, source_ip, network_verified, latitude, longitude, accuracy_meters, calculated_distance_meters, geofence_verified, challenge_id, status, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, ?, 'SUCCESS', ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, ?, ?, 1, ?, 'SUCCESS', ?)`,
       [
         recordId,
         employee.id,
@@ -1252,13 +1411,12 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
         serverTimestamp,
         credentialIdRef,
         clientIp,
-        isNetworkApproved ? 1 : 0,
-        lat,
-        lng,
-        accuracy,
-        Math.round(distanceMeters),
+        location.lat,
+        location.lng,
+        presenceEval.location.accuracyMeters,
+        presenceEval.location.distanceMeters,
         challengeId,
-        `Verified High-Trust ${punchType}`
+        `Verified High-Trust ${punchType} [Ref: ${correlationId}]`
       ]
     );
 
@@ -1270,12 +1428,16 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
     // Record Success Attempt Evidence
     await recordAttendanceAttempt({
+      correlationId,
       employeeId: employee.id,
       shiftInstanceId: instance.id,
       action: punchType,
       sourceIp: clientIp,
-      networkVerified: isNetworkApproved ? 1 : 0,
-      lat, lng, accuracy, distance: Math.round(distanceMeters),
+      networkVerified: 1,
+      lat: location.lat,
+      lng: location.lng,
+      accuracy: presenceEval.location.accuracyMeters,
+      distance: presenceEval.location.distanceMeters,
       authenticationVerified: 1,
       reasonCode: 'SUCCESS',
       result: 'ACCEPTED'
@@ -1288,11 +1450,12 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
       'INFO',
       'ATTENDANCE_RECORDED',
       `High-Trust Attendance ${punchType} recorded successfully`,
-      { recordId, shiftInstanceId: instance.id, distance: Math.round(distanceMeters), accuracy, ip: clientIp }
+      { correlationId, recordId, shiftInstanceId: instance.id, distance: presenceEval.location.distanceMeters, accuracy: presenceEval.location.accuracyMeters, ip: clientIp }
     );
 
     return res.json({
       success: true,
+      correlationId,
       message: `Attendance ${punchType === 'CHECK_IN' ? 'Punch In' : 'Punch Out'} recorded successfully!`,
       currentPunchStatus: nextState,
       serverTimestamp,
@@ -1301,12 +1464,13 @@ app.post('/api/attendance/punch', requireAuth, requireEmployee, async (req, res)
 
   } catch (err) {
     if (err.message && err.message.startsWith('DATABASE_UNAVAILABLE')) {
-      return res.status(500).json({ success: false, reasonCode: 'DATABASE_UNAVAILABLE', error: 'Database service unavailable.' });
+      return res.status(500).json({ success: false, correlationId, reasonCode: 'DATABASE_UNAVAILABLE', error: 'Database service unavailable.' });
     }
     console.error('[Attendance Punch Error]:', err);
     const isAuthErr = err.message && (err.message.includes('counter') || err.message.includes('signature') || err.message.includes('origin') || err.message.includes('challenge') || err.message.includes('credential'));
     return res.status(400).json({
       success: false,
+      correlationId,
       reasonCode: isAuthErr ? 'AUTHENTICATION_FAILED' : 'ATTENDANCE_VALIDATION_FAILED',
       error: err.message || 'An error occurred during attendance verification.'
     });
