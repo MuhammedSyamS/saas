@@ -161,7 +161,7 @@ async function runEnterpriseTestSuite() {
       punchType: 'CHECK_IN',
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: challengeId
-    });
+    }, { 'x-forwarded-for': '120.61.26.70' });
     if (res.body.reasonCode !== 'AUTHENTICATION_FAILED') {
       throw new Error(`Expected AUTHENTICATION_FAILED but got ${res.body.reasonCode}`);
     }
@@ -174,7 +174,7 @@ async function runEnterpriseTestSuite() {
       punchType: 'CHECK_IN',
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '120.61.26.70' });
     if (res.body.reasonCode !== 'LOCATION_REQUIRED') {
       throw new Error(`Expected LOCATION_REQUIRED but got ${res.body.reasonCode}`);
     }
@@ -188,7 +188,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.850000, lng: 76.990000, accuracy: 15 }, // ~12km away
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '120.61.26.70' });
     if (res.body.reasonCode !== 'OUTSIDE_GEOFENCE') {
       throw new Error(`Expected OUTSIDE_GEOFENCE but got ${res.body.reasonCode}`);
     }
@@ -202,7 +202,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 450 }, // ±450m (max 300m)
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '120.61.26.70' });
     if (res.body.reasonCode !== 'LOCATION_ACCURACY_TOO_LOW') {
       throw new Error(`Expected LOCATION_ACCURACY_TOO_LOW but got ${res.body.reasonCode}`);
     }
@@ -215,7 +215,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: challengeId, // Previously consumed in test case 8
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    });
+    }, { 'x-forwarded-for': '120.61.26.70' });
     if (res.body.reasonCode !== 'CHALLENGE_ALREADY_USED') {
       throw new Error(`Expected CHALLENGE_ALREADY_USED but got: ${res.body.reasonCode}`);
     }
@@ -230,7 +230,7 @@ async function runEnterpriseTestSuite() {
       geofence_lng: 76.938625,
       geofence_radius_meters: 500,
       max_allowed_accuracy_meters: 300,
-      hospital_wifi_ips: '["103.15.22.4"]',
+      hospital_wifi_ips: '["120.61.26.70"]',
       network_enforcement_mode: 'enforce'
     });
 
@@ -256,7 +256,7 @@ async function runEnterpriseTestSuite() {
       geofence_lng: 76.938625,
       geofence_radius_meters: 500,
       max_allowed_accuracy_meters: 300,
-      hospital_wifi_ips: '["127.0.0.1", "::1", "103.170.54.239"]',
+      hospital_wifi_ips: '["120.61.26.70", "120.61.26.0/24", "103.170.54.239"]',
       network_enforcement_mode: 'enforce'
     });
   });
@@ -283,7 +283,7 @@ async function runEnterpriseTestSuite() {
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } },
       clientTimestamp: fakeClientTime
-    }, { 'x-forwarded-for': '127.0.0.1' });
+    }, { 'x-forwarded-for': '120.61.26.70' });
 
     if (!res.body.success) throw new Error(`Server timestamp test punch failed: ${res.body.error}`);
     if (res.body.serverTimestamp && res.body.serverTimestamp.startsWith('1999')) {
@@ -300,7 +300,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    }, { 'x-forwarded-for': '127.0.0.1' });
+    }, { 'x-forwarded-for': '120.61.26.70' });
 
     if (res.body.reasonCode !== 'DUPLICATE_CHECK_IN') {
       throw new Error(`Expected DUPLICATE_CHECK_IN but got ${res.body.reasonCode}`);
@@ -316,7 +316,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    }, { 'x-forwarded-for': '127.0.0.1' });
+    }, { 'x-forwarded-for': '120.61.26.70' });
 
     if (res.status !== 200 || !res.body.success) {
       throw new Error(res.body.error || 'Valid Punch Out failed');
@@ -332,7 +332,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.752625, lng: 76.938625, accuracy: 15 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId, response: { clientDataJSON: 'xyz' } }
-    }, { 'x-forwarded-for': '127.0.0.1' });
+    }, { 'x-forwarded-for': '120.61.26.70' });
 
     if (res.body.reasonCode !== 'SHIFT_ALREADY_COMPLETED') {
       throw new Error(`Expected SHIFT_ALREADY_COMPLETED but got ${res.body.reasonCode}`);
@@ -342,7 +342,7 @@ async function runEnterpriseTestSuite() {
   // 19. Admin Pilot Network Diagnostics Endpoint
   await testCase('19. Admin Pilot Network Diagnostics API (/api/admin/network-diagnostics)', async () => {
     await makeRequest('/api/auth/login', 'POST', { email: 'admin@vaidhyar.org', password: 'AdminPassword123!' });
-    const res = await makeRequest('/api/admin/network-diagnostics');
+    const res = await makeRequest('/api/admin/network-diagnostics', 'GET', null, { 'x-forwarded-for': '120.61.26.70' });
     if (res.status !== 200 || !res.body.detectedClientIp || !res.body.configuredHospitalIps) {
       throw new Error('Admin network diagnostics endpoint failed');
     }
@@ -351,7 +351,7 @@ async function runEnterpriseTestSuite() {
   // 20. Admin Pilot Calibration & Debug Endpoint
   await testCase('20. Admin Pilot Calibration & Debug API (/api/admin/calibrate-debug)', async () => {
     await makeRequest('/api/auth/login', 'POST', { email: 'admin@vaidhyar.org', password: 'AdminPassword123!' });
-    const res = await makeRequest('/api/admin/calibrate-debug?lat=8.752625&lng=76.938625&accuracy=15');
+    const res = await makeRequest('/api/admin/calibrate-debug?lat=8.752625&lng=76.938625&accuracy=15', 'GET', null, { 'x-forwarded-for': '120.61.26.70' });
     if (res.status !== 200 || !res.body.evaluation || res.body.evaluation.overallPassed !== true) {
       throw new Error('Admin calibration debug evaluation failed');
     }
@@ -369,7 +369,7 @@ async function runEnterpriseTestSuite() {
       location: { lat: 8.756700, lng: 76.938625, accuracy: 280 },
       challengeId: chRes.body.challengeId,
       credential: { id: mockCredId2, response: { clientDataJSON: 'xyz' } }
-    }, { 'x-forwarded-for': '127.0.0.1' });
+    }, { 'x-forwarded-for': '120.61.26.70' });
 
     if (res.body.reasonCode !== 'BORDERLINE_LOCATION_RETRY') {
       throw new Error(`Expected BORDERLINE_LOCATION_RETRY but got ${res.body.reasonCode}`);
