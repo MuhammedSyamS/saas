@@ -92,6 +92,10 @@ function isApprovedHospitalNetwork(clientIp, allowedIpsInput) {
 
   const cleanClient = clientIp.replace(/^::ffff:/, '');
 
+  if (process.env.NODE_ENV !== 'production' && (cleanClient === '127.0.0.1' || cleanClient === '::1')) {
+    return true;
+  }
+
   for (const entry of allowedList) {
     if (!entry) continue;
     const cleanEntry = entry.trim().replace(/^::ffff:/, '');
