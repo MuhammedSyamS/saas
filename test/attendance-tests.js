@@ -256,7 +256,7 @@ async function runEnterpriseTestSuite() {
       geofence_lng: 76.938625,
       geofence_radius_meters: 500,
       max_allowed_accuracy_meters: 300,
-      hospital_wifi_ips: '["120.61.26.70", "120.61.26.0/24", "103.170.54.239"]',
+      hospital_wifi_ips: '["120.61.26.70"]',
       network_enforcement_mode: 'enforce'
     });
   });
