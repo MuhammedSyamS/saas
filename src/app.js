@@ -707,6 +707,29 @@ app.get('/api/admin/calibrate-debug', requireAuth, requireAdmin, async (req, res
   }
 });
 
+app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const settings = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};
+    const clientIp = getTrustedClientIp(req);
+    res.json({
+      success: true,
+      settings,
+      detectedClientIp: clientIp
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const logs = await queryAll('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100');
+    res.json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
   try {
     const current = await queryGet('SELECT * FROM system_settings ORDER BY id ASC LIMIT 1') || {};

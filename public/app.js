@@ -133,6 +133,9 @@ function updateAuthenticatedUI() {
   if (btnAuth) btnAuth.textContent = '🚪 Logout';
   if (btnPasskey) btnPasskey.style.display = state.hasPasskey ? 'none' : 'inline-flex';
 
+  const btnAdmin = document.getElementById('btnAdminTabToggle');
+  if (btnAdmin) btnAdmin.style.display = emp.role === 'admin' ? 'inline-flex' : 'none';
+
   // Greeting
   document.getElementById('greetingTitle').textContent = `Good Day, ${emp.name}`;
   document.getElementById('greetingSub').textContent = `Employee ID: ${emp.id} • ${emp.email}`;
@@ -199,6 +202,11 @@ function updateUnauthenticatedUI() {
   if (pill) pill.style.display = 'none';
   if (btnPasskey) btnPasskey.style.display = 'none';
   if (btnAuth) btnAuth.textContent = '🔑 Login';
+
+  const btnAdmin = document.getElementById('btnAdminTabToggle');
+  if (btnAdmin) btnAdmin.style.display = 'none';
+  const adminSec = document.getElementById('adminPanelSection');
+  if (adminSec) adminSec.style.display = 'none';
 }
 
 function formatTimeOnly(isoStr) {
@@ -642,4 +650,191 @@ function openPasskeyPromptModal() {
 function closePasskeyPromptModal() {
   const modal = document.getElementById('passkeyPromptModal');
   if (modal) modal.style.display = 'none';
+}
+
+// -------------------------------------------------------------
+// ADMIN BRANCH NETWORK & SECURITY PANEL
+// -------------------------------------------------------------
+
+let adminState = {
+  settings: null,
+  detectedIp: '',
+  ipList: []
+};
+
+function toggleAdminPanelTab() {
+  const adminSec = document.getElementById('adminPanelSection');
+  const punchSec = document.getElementById('punchTab');
+  const btnToggle = document.getElementById('btnAdminTabToggle');
+
+  if (adminSec.style.display === 'none') {
+    adminSec.style.display = 'block';
+    punchSec.style.display = 'none';
+    if (btnToggle) btnToggle.textContent = '📋 Staff Punch Tab';
+    loadAdminSettings();
+  } else {
+    adminSec.style.display = 'none';
+    punchSec.style.display = 'block';
+    if (btnToggle) btnToggle.textContent = '🛡️ Admin Panel';
+  }
+}
+
+async function loadAdminSettings() {
+  showAlert('Loading admin network settings...', 'info');
+  const { status, data } = await safeFetchJson('/api/admin/settings');
+  if (status === 200 && data.success) {
+    adminState.settings = data.settings || {};
+    adminState.detectedIp = data.detectedClientIp || '';
+
+    let parsedIps = [];
+    try {
+      parsedIps = typeof adminState.settings.hospital_wifi_ips === 'string'
+        ? JSON.parse(adminState.settings.hospital_wifi_ips)
+        : (adminState.settings.hospital_wifi_ips || []);
+    } catch (e) {
+      parsedIps = String(adminState.settings.hospital_wifi_ips || '').split(',').map(s => s.trim());
+    }
+
+    adminState.ipList = Array.from(new Set(parsedIps.filter(Boolean)));
+    renderAdminPanelUI();
+    loadAdminAuditLogs();
+  } else {
+    showAlert(`Failed to load admin settings: ${data.error || 'Access denied'}`, 'error');
+  }
+}
+
+function renderAdminPanelUI() {
+  const elIp = document.getElementById('adminDetectedIp');
+  if (elIp) elIp.textContent = adminState.detectedIp || 'Unknown';
+
+  const elMode = document.getElementById('adminNetworkMode');
+  if (elMode) elMode.value = adminState.settings.network_enforcement_mode || 'enforce';
+
+  const elName = document.getElementById('adminHospitalName');
+  if (elName) elName.value = adminState.settings.hospital_name || 'VAIDHYAR MANDHIRAM, Kallara';
+
+  const elLat = document.getElementById('adminGeofenceLat');
+  if (elLat) elLat.value = adminState.settings.geofence_lat !== undefined ? adminState.settings.geofence_lat : 8.752625;
+
+  const elLng = document.getElementById('adminGeofenceLng');
+  if (elLng) elLng.value = adminState.settings.geofence_lng !== undefined ? adminState.settings.geofence_lng : 76.938625;
+
+  const elRad = document.getElementById('adminRadiusMeters');
+  if (elRad) elRad.value = adminState.settings.geofence_radius_meters !== undefined ? adminState.settings.geofence_radius_meters : 500;
+
+  const elAcc = document.getElementById('adminMaxAccuracyMeters');
+  if (elAcc) elAcc.value = adminState.settings.max_allowed_accuracy_meters !== undefined ? adminState.settings.max_allowed_accuracy_meters : 300;
+
+  renderBranchIpList();
+}
+
+function renderBranchIpList() {
+  const container = document.getElementById('adminIpListContainer');
+  if (!container) return;
+
+  if (adminState.ipList.length === 0) {
+    container.innerHTML = `<div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No branch Wi-Fi IPs configured yet. Click "Auto-Add My Wi-Fi IP" below.</div>`;
+    return;
+  }
+
+  container.innerHTML = adminState.ipList.map((ip) => {
+    const isCurrent = ip === adminState.detectedIp;
+    return `
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: #ffffff; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <span style="font-family: monospace; font-size: 0.95rem; font-weight: 800; color: var(--text-primary);">${ip}</span>
+          ${isCurrent ? `<span style="font-size: 0.7rem; font-weight: 800; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 0.2rem 0.5rem; border-radius: 999px;">CURRENT WI-FI</span>` : ''}
+        </div>
+        <button class="btn-secondary" style="font-size: 0.75rem; padding: 0.3rem 0.6rem; color: #be123c; border-color: #fecdd3;" onclick="removeBranchIp('${ip}')">
+          🗑️ Remove
+        </button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function addBranchIp() {
+  const input = document.getElementById('newIpInput');
+  const val = input ? input.value.trim() : '';
+
+  if (!val) {
+    return showAlert('Please enter a valid IP address or CIDR subnet.', 'error');
+  }
+
+  if (adminState.ipList.includes(val)) {
+    return showAlert('This IP address is already in the authorized list.', 'info');
+  }
+
+  adminState.ipList.push(val);
+  if (input) input.value = '';
+  renderBranchIpList();
+  await saveAdminSettingsQuiet();
+  showAlert(`Added branch IP ${val} successfully!`, 'success');
+}
+
+async function removeBranchIp(ipToRemove) {
+  adminState.ipList = adminState.ipList.filter(ip => ip !== ipToRemove);
+  renderBranchIpList();
+  await saveAdminSettingsQuiet();
+  showAlert(`Removed IP ${ipToRemove}`, 'info');
+}
+
+async function autoAddCurrentIp() {
+  if (!adminState.detectedIp) {
+    return showAlert('No detected client IP available.', 'error');
+  }
+  if (adminState.ipList.includes(adminState.detectedIp)) {
+    return showAlert(`Your current Wi-Fi IP (${adminState.detectedIp}) is already authorized!`, 'info');
+  }
+  adminState.ipList.push(adminState.detectedIp);
+  renderBranchIpList();
+  await saveAdminSettingsQuiet();
+  showAlert(`🎉 Auto-added your current Wi-Fi IP (${adminState.detectedIp}) to authorized branch networks!`, 'success');
+}
+
+async function saveAdminSettingsQuiet() {
+  const payload = {
+    hospital_name: document.getElementById('adminHospitalName').value.trim() || 'VAIDHYAR MANDHIRAM, Kallara',
+    network_enforcement_mode: document.getElementById('adminNetworkMode').value,
+    geofence_lat: parseFloat(document.getElementById('adminGeofenceLat').value) || 8.752625,
+    geofence_lng: parseFloat(document.getElementById('adminGeofenceLng').value) || 76.938625,
+    geofence_radius_meters: parseFloat(document.getElementById('adminRadiusMeters').value) || 500,
+    max_allowed_accuracy_meters: parseFloat(document.getElementById('adminMaxAccuracyMeters').value) || 300,
+    hospital_wifi_ips: JSON.stringify(adminState.ipList)
+  };
+
+  await safeFetchJson('/api/admin/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+async function handleSaveAdminSettings(event) {
+  event.preventDefault();
+  showAlert('Saving admin security settings...', 'info');
+  await saveAdminSettingsQuiet();
+  showAlert('🎉 Admin security & branch Wi-Fi settings saved successfully!', 'success');
+}
+
+async function loadAdminAuditLogs() {
+  const tbody = document.getElementById('adminAuditLogTableBody');
+  if (!tbody) return;
+
+  const { status, data } = await safeFetchJson('/api/admin/audit-logs');
+  if (status === 200 && data.success && Array.isArray(data.logs)) {
+    if (data.logs.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="padding: 1rem; text-align: center; color: var(--text-muted);">No security events logged yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.logs.slice(0, 20).map(log => `
+      <tr style="border-bottom: 1px solid var(--border-color);">
+        <td style="padding: 0.5rem 0.75rem; white-space: nowrap;">${formatTimeOnly(log.timestamp)}</td>
+        <td style="padding: 0.5rem 0.75rem; font-weight: 700;">${log.employee_name || 'Anonymous'}</td>
+        <td style="padding: 0.5rem 0.75rem;"><code>${log.event_type}</code></td>
+        <td style="padding: 0.5rem 0.75rem;"><span style="color: ${log.severity === 'WARNING' || log.severity === 'SECURITY_SUSPICIOUS' ? '#e11d48' : '#059669'}; font-weight: 700;">${log.severity}</span></td>
+        <td style="padding: 0.5rem 0.75rem; color: var(--text-secondary);">${log.reason || '--'}</td>
+      </tr>
+    `).join('');
+  }
 }
