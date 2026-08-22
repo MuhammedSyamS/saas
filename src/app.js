@@ -87,7 +87,7 @@ function isApprovedHospitalNetwork(clientIp, allowedIpsInput) {
 
   // Include default hospital IPs if allowedList is empty
   if (!allowedList || allowedList.length === 0) {
-    allowedList = ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
+    allowedList = ['120.61.26.70', '120.61.26.0/24', '103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
   }
 
   const cleanClient = clientIp.replace(/^::ffff:/, '');
@@ -148,7 +148,7 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
 // UNIFIED PHYSICAL PRESENCE EVALUATOR (NETWORK & LOCATION SIGNALS)
 // -------------------------------------------------------------
 function evaluatePhysicalPresence({ clientIp, location, settings }) {
-  const allowedIps = (settings && settings.hospital_wifi_ips) || process.env.HOSPITAL_ALLOWED_PUBLIC_IPS || ['103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
+  const allowedIps = (settings && settings.hospital_wifi_ips) || process.env.HOSPITAL_ALLOWED_PUBLIC_IPS || ['120.61.26.70', '120.61.26.0/24', '103.170.54.239', '103.170.54.0/24', '103.15.22.4', '103.15.22.5', '127.0.0.1', '::1'];
   const networkMode = process.env.NETWORK_ENFORCEMENT_MODE || (settings && settings.network_enforcement_mode) || 'enforce';
 
   const isNetworkApproved = isApprovedHospitalNetwork(clientIp, allowedIps);
