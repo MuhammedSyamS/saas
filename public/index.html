@@ -35,10 +35,6 @@
           <span id="currentUserName">Loading...</span>
         </div>
 
-        <button id="btnAdminTabToggle" class="btn-secondary" style="display: none;" onclick="toggleAdminPanelTab()">
-          🛡️ Admin Panel
-        </button>
-
         <button id="btnRegisterPasskey" class="btn-secondary" style="display: none;" onclick="registerWebAuthnPasskey()">
           🔑 Register Passkey
         </button>
@@ -73,7 +69,7 @@
         <!-- 1. INLINE LOGIN FORM -->
         <form id="inlineLoginForm" onsubmit="handleStaffLoginForm(event)" style="display: block;">
           <div style="text-align: center; margin-bottom: 1.5rem;">
-            <h2 style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: var(--text-primary);">Staff Account Login</h2>
+            <h2 style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: var(--text-primary);">Staff & Admin Login</h2>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Enter your credentials or click Quick Login below</p>
           </div>
 
@@ -96,13 +92,13 @@
             <div style="font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; text-align: center; letter-spacing: 0.05em;">⚡ Quick Demo Login Shortcuts</div>
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.4rem;">
               <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 0.5rem;" onclick="fillQuickLogin('rahul.sharma@vaidhyar.org', 'Password123!')">
-                👤 Rahul
+                👤 Staff
               </button>
               <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 0.5rem;" onclick="fillQuickLogin('ananya.iyer@vaidhyar.org', 'Password123!')">
                 👩‍⚕️ Dr. Ananya
               </button>
               <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 0.5rem; background: #e0f2fe; color: #0369a1; border-color: #bae6fd;" onclick="fillQuickLogin('admin@vaidhyar.org', 'AdminPassword123!')">
-                🛡️ Admin
+                🛡️ Admin Dashboard
               </button>
             </div>
           </div>
@@ -111,8 +107,8 @@
         <!-- 2. INLINE ACCOUNT REGISTRATION FORM -->
         <form id="inlineRegisterForm" onsubmit="handleStaffRegisterForm(event)" style="display: none;">
           <div style="text-align: center; margin-bottom: 1.25rem;">
-            <h2 style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: var(--text-primary);">Create Staff Account</h2>
-            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Register a new hospital employee account</p>
+            <h2 style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: var(--text-primary);">Create Account</h2>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Register a new employee or administrator account</p>
           </div>
 
           <div style="margin-bottom: 0.85rem;">
@@ -136,10 +132,10 @@
           </div>
 
           <div style="margin-bottom: 1.25rem;">
-            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em;">STAFF ROLE</label>
+            <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em;">ACCOUNT ROLE</label>
             <select id="regRole" class="select-input">
               <option value="employee">Hospital Staff Employee</option>
-              <option value="admin">Chief Administrative Officer</option>
+              <option value="admin">Chief Administrative Officer (Admin Panel Access)</option>
             </select>
           </div>
 
@@ -150,7 +146,7 @@
       </div>
     </section>
 
-    <!-- AUTHENTICATED PUNCH ATTENDANCE CARD -->
+    <!-- STAFF ATTENDANCE PUNCH CARD (EMPLOYEE VIEW ONLY) -->
     <section id="punchTab" class="tab-content" style="display: none;">
       <div class="card">
         <!-- Greeting -->
@@ -208,122 +204,149 @@
       </div>
     </section>
 
-    <!-- ADMIN CONTROL PANEL (BRANCH WI-FI IP & GEOFENCE MANAGER) -->
+    <!-- MASTER ADMIN CONTROL DASHBOARD (ADMIN VIEW ONLY) -->
     <section id="adminPanelSection" class="tab-content" style="display: none;">
-      <div class="card" style="max-width: 800px; margin: 0 auto;">
+      <div class="card" style="max-width: 900px; margin: 0 auto; padding: 2rem;">
         
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-color);">
+        <!-- Admin Dashboard Header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid var(--border-color);">
           <div>
-            <h2 style="font-family: var(--font-heading); font-size: 1.5rem; font-weight: 800; color: var(--text-primary);">🛡️ Hospital Branch Network Admin Panel</h2>
-            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Manage authorized Wi-Fi public IPs, branch networks, and security thresholds</p>
+            <h2 style="font-family: var(--font-heading); font-size: 1.6rem; font-weight: 800; color: var(--text-primary);">🛡️ System Control & Branch Network Admin</h2>
+            <p style="font-size: 0.88rem; color: var(--text-secondary); margin-top: 0.25rem;">Configure hospital branch Wi-Fi public IPs, GPS geofences, and physical-presence security rules</p>
           </div>
-          <button class="btn-secondary" style="font-size: 0.85rem; padding: 0.5rem 0.85rem;" onclick="loadAdminSettings()">
-            🔄 Refresh
+          <button class="btn-secondary" style="font-size: 0.85rem; padding: 0.5rem 1rem; font-weight: 700;" onclick="loadAdminSettings()">
+            🔄 Refresh Control Panel
           </button>
         </div>
 
-        <!-- 1. LIVE DETECTED CLIENT IP CARD -->
-        <div style="background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;">
+        <!-- CURRENT WI-FI IP DETECTOR BANNER -->
+        <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: var(--radius-md); padding: 1.1rem 1.3rem; margin-bottom: 1.75rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
           <div>
-            <div style="font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">YOUR CURRENT WI-FI PUBLIC IP</div>
-            <div id="adminDetectedIp" style="font-family: monospace; font-size: 1.2rem; font-weight: 800; color: var(--text-primary); margin-top: 0.2rem;">Detecting...</div>
+            <div style="font-size: 0.72rem; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.05em;">YOUR CURRENT WI-FI PUBLIC IP</div>
+            <div id="adminDetectedIp" style="font-family: monospace; font-size: 1.35rem; font-weight: 800; color: #1e3a8a; margin-top: 0.2rem;">Detecting...</div>
           </div>
           <div>
-            <button id="btnAutoAddCurrentIp" class="btn-secondary" style="background: #e0f2fe; color: #0369a1; border-color: #bae6fd; font-weight: 700; padding: 0.6rem 1rem;" onclick="autoAddCurrentIp()">
-              ➕ Auto-Add My Wi-Fi IP
+            <button id="btnAutoAddCurrentIp" class="btn-secondary" style="background: #0284c7; color: #ffffff; border: none; font-weight: 700; padding: 0.65rem 1.1rem; border-radius: 10px; font-size: 0.88rem;" onclick="autoAddCurrentIp()">
+              ➕ Auto-Add My Wi-Fi IP To Allowed List
             </button>
           </div>
         </div>
 
-        <!-- 2. BRANCH WI-FI PUBLIC IPS MANAGER -->
-        <div style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.1rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.75rem;">🌐 Authorized Hospital Branch Wi-Fi Public IPs</h3>
-          
-          <!-- IP List Table / Pills -->
-          <div id="adminIpListContainer" style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem;">
-            <div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Loading authorized IP list...</div>
+        <!-- ADMIN DASHBOARD TABS -->
+        <div class="auth-toggle-grid" style="margin-bottom: 1.5rem;">
+          <button id="adminTabWifi" class="auth-toggle-btn active" onclick="switchAdminSubTab('wifi')">
+            🌐 Wi-Fi & Branch Networks
+          </button>
+          <button id="adminTabGps" class="auth-toggle-btn" onclick="switchAdminSubTab('gps')">
+            📍 GPS & Geofence Calibration
+          </button>
+          <button id="adminTabAudit" class="auth-toggle-btn" onclick="switchAdminSubTab('audit')">
+            📋 Attendance & Security Logs
+          </button>
+        </div>
+
+        <!-- TAB 1: BRANCH WI-FI PUBLIC IP MANAGER -->
+        <div id="adminSubTabWifi" style="display: block;">
+          <h3 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.5rem;">Hospital Branch Wi-Fi Public IPs & Router Networks</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.25rem;">Employees must be connected through one of these approved Wi-Fi networks to punch in.</p>
+
+          <!-- Branch IP List Container -->
+          <div id="adminIpListContainer" style="display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.5rem;">
+            <div style="padding: 1.25rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Loading authorized branch networks...</div>
           </div>
 
-          <!-- Add New Branch IP Form -->
-          <div style="background: #f8fafc; border: 1px dashed var(--border-color); border-radius: var(--radius-md); padding: 1.25rem;">
-            <div style="font-size: 0.8rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.75rem; text-transform: uppercase;">Add New Branch Wi-Fi IP or Subnet</div>
+          <!-- Add Branch IP Form -->
+          <div style="background: #f8fafc; border: 1px dashed var(--border-color); border-radius: var(--radius-md); padding: 1.35rem;">
+            <div style="font-size: 0.82rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em;">Add Authorized Branch Wi-Fi Network</div>
             
-            <div style="display: grid; grid-template-columns: 1fr 120px; gap: 0.75rem;">
-              <input type="text" id="newIpInput" class="select-input" placeholder="e.g. 120.61.26.70 or 120.61.26.0/24">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 120px; gap: 0.75rem;">
+              <input type="text" id="newIpLabel" class="select-input" placeholder="Branch Name (e.g. Kallara Main / OPD Wi-Fi)">
+              <input type="text" id="newIpInput" class="select-input" placeholder="Public IP or CIDR (e.g. 120.61.26.70)">
               <button class="btn-punch-main in" style="height: 42px; font-size: 0.88rem; border-radius: 8px;" onclick="addBranchIp()">
                 ➕ Add IP
               </button>
             </div>
-            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem;">
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
               Tip: Enter exact public IP (e.g. <code>120.61.26.70</code>) or CIDR range (e.g. <code>120.61.26.0/24</code>) for dynamic ISP router lines.
             </div>
           </div>
         </div>
 
-        <!-- 3. SECURITY ENFORCEMENT & GEOFENCE CALIBRATION FORM -->
-        <form onsubmit="handleSaveAdminSettings(event)">
-          <h3 style="font-size: 1.1rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.75rem;">⚙️ Security & Geofence Calibration</h3>
-          
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+        <!-- TAB 2: GPS GEOFENCE & LOCATION CALIBRATION -->
+        <div id="adminSubTabGps" style="display: none;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
             <div>
-              <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">NETWORK ENFORCEMENT MODE</label>
-              <select id="adminNetworkMode" class="select-input">
-                <option value="enforce">🔒 Enforce Mode (Block unauthorized IPs)</option>
-                <option value="observe">👁️ Observe Mode (Audit log without blocking)</option>
-              </select>
+              <h3 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">Hospital Geofence & Location Calibration</h3>
+              <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">Set exact GPS center point and physical attendance boundary limits</p>
             </div>
-
-            <div>
-              <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">HOSPITAL FACILITY NAME</label>
-              <input type="text" id="adminHospitalName" class="select-input" value="VAIDHYAR MANDHIRAM, Kallara">
-            </div>
+            <button class="btn-secondary" style="background: #ecfdf5; color: #047857; border-color: #a7f3d0; font-weight: 700; font-size: 0.82rem; padding: 0.5rem 0.85rem;" onclick="captureCurrentGpsForAdmin()">
+              📍 Capture My Current GPS Coordinates
+            </button>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem; margin-bottom: 1.5rem;">
-            <div>
-              <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">GEOFENCE LATITUDE</label>
-              <input type="number" step="any" id="adminGeofenceLat" class="select-input" value="8.752625">
+          <form onsubmit="handleSaveAdminSettings(event)">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+              <div>
+                <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.35rem; text-transform: uppercase;">FACILITY NAME</label>
+                <input type="text" id="adminHospitalName" class="select-input" value="VAIDHYAR MANDHIRAM, Kallara">
+              </div>
+
+              <div>
+                <label style="display: block; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.35rem; text-transform: uppercase;">NETWORK ENFORCEMENT POLICY</label>
+                <select id="adminNetworkMode" class="select-input">
+                  <option value="enforce">🔒 Enforce Mode (Strictly block unauthorized IPs)</option>
+                  <option value="observe">👁️ Observe Mode (Audit log without blocking)</option>
+                </select>
+              </div>
             </div>
 
-            <div>
-              <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">GEOFENCE LONGITUDE</label>
-              <input type="number" step="any" id="adminGeofenceLng" class="select-input" value="76.938625">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem; margin-bottom: 1.5rem;">
+              <div>
+                <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">GEOFENCE LATITUDE</label>
+                <input type="number" step="any" id="adminGeofenceLat" class="select-input" value="8.752625">
+              </div>
+
+              <div>
+                <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">GEOFENCE LONGITUDE</label>
+                <input type="number" step="any" id="adminGeofenceLng" class="select-input" value="76.938625">
+              </div>
+
+              <div>
+                <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">GEOFENCE RADIUS (M)</label>
+                <input type="number" id="adminRadiusMeters" class="select-input" value="500">
+              </div>
+
+              <div>
+                <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">MAX GPS UNCERTAINTY (M)</label>
+                <input type="number" id="adminMaxAccuracyMeters" class="select-input" value="300">
+              </div>
             </div>
 
-            <div>
-              <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">RADIUS (METERS)</label>
-              <input type="number" id="adminRadiusMeters" class="select-input" value="500">
-            </div>
+            <button type="submit" class="btn-punch-main in" style="width: 100%; height: 48px; font-size: 1rem; border-radius: 12px;">
+              💾 Save Geofence & Location Calibration
+            </button>
+          </form>
+        </div>
 
-            <div>
-              <label style="display: block; font-size: 0.72rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.3rem; text-transform: uppercase;">MAX GPS UNCERTAINTY</label>
-              <input type="number" id="adminMaxAccuracyMeters" class="select-input" value="300">
-            </div>
-          </div>
+        <!-- TAB 3: ATTENDANCE & SECURITY AUDIT LOGS -->
+        <div id="adminSubTabAudit" style="display: none;">
+          <h3 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.5rem;">Live Attendance & Physical Presence Audit Logs</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">Real-time timestamped log of staff punches, Wi-Fi network checks, and physical presence verifications</p>
 
-          <button type="submit" class="btn-punch-main in" style="width: 100%; height: 46px; font-size: 0.95rem; border-radius: 12px;">
-            💾 Save All Admin Security Settings
-          </button>
-        </form>
-
-        <!-- 4. RECENT AUDIT LOGS TABLE -->
-        <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
-          <h3 style="font-size: 1.1rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.75rem;">📋 Security & Network Audit Log</h3>
-          
-          <div style="max-height: 250px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md);">
+          <div style="max-height: 350px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md);">
             <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left;">
               <thead>
                 <tr style="background: #f8fafc; border-bottom: 1px solid var(--border-color);">
-                  <th style="padding: 0.6rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Timestamp</th>
-                  <th style="padding: 0.6rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Staff Name</th>
-                  <th style="padding: 0.6rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Event</th>
-                  <th style="padding: 0.6rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Severity</th>
-                  <th style="padding: 0.6rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Reason</th>
+                  <th style="padding: 0.65rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Time</th>
+                  <th style="padding: 0.65rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Staff Name</th>
+                  <th style="padding: 0.65rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Event</th>
+                  <th style="padding: 0.65rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Severity</th>
+                  <th style="padding: 0.65rem 0.75rem; font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Verification Details</th>
                 </tr>
               </thead>
               <tbody id="adminAuditLogTableBody">
                 <tr>
-                  <td colspan="5" style="padding: 1rem; text-align: center; color: var(--text-muted);">Loading audit log history...</td>
+                  <td colspan="5" style="padding: 1.25rem; text-align: center; color: var(--text-muted);">Loading audit log history...</td>
                 </tr>
               </tbody>
             </table>

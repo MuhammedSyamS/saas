@@ -117,8 +117,14 @@ function updateAuthenticatedUI() {
   if (!emp) return updateUnauthenticatedUI();
 
   // Hide Auth Card, Show Punch View
-  document.getElementById('authCardSection').style.display = 'none';
-  document.getElementById('punchTab').style.display = 'block';
+  if (emp.role === 'admin') {
+    document.getElementById('punchTab').style.display = 'none';
+    document.getElementById('adminPanelSection').style.display = 'block';
+    loadAdminSettings();
+  } else {
+    document.getElementById('punchTab').style.display = 'block';
+    document.getElementById('adminPanelSection').style.display = 'none';
+  }
 
   // Header Pill
   const pill = document.getElementById('userInfoPill');
@@ -726,6 +732,44 @@ function renderAdminPanelUI() {
   if (elAcc) elAcc.value = adminState.settings.max_allowed_accuracy_meters !== undefined ? adminState.settings.max_allowed_accuracy_meters : 300;
 
   renderBranchIpList();
+}
+
+function switchAdminSubTab(tabName) {
+  const tabWifi = document.getElementById('adminTabWifi');
+  const tabGps = document.getElementById('adminTabGps');
+  const tabAudit = document.getElementById('adminTabAudit');
+
+  const subWifi = document.getElementById('adminSubTabWifi');
+  const subGps = document.getElementById('adminSubTabGps');
+  const subAudit = document.getElementById('adminSubTabAudit');
+
+  if (tabWifi) tabWifi.className = 'auth-toggle-btn' + (tabName === 'wifi' ? ' active' : '');
+  if (tabGps) tabGps.className = 'auth-toggle-btn' + (tabName === 'gps' ? ' active' : '');
+  if (tabAudit) tabAudit.className = 'auth-toggle-btn' + (tabName === 'audit' ? ' active' : '');
+
+  if (subWifi) subWifi.style.display = tabName === 'wifi' ? 'block' : 'none';
+  if (subGps) subGps.style.display = tabName === 'gps' ? 'block' : 'none';
+  if (subAudit) subAudit.style.display = tabName === 'audit' ? 'block' : 'none';
+}
+
+function captureCurrentGpsForAdmin() {
+  if (!navigator.geolocation) {
+    return showAlert('Geolocation is not supported by your browser.', 'error');
+  }
+  showAlert('Capturing high-precision GPS coordinates...', 'info');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const lat = pos.coords.latitude.toFixed(6);
+      const lng = pos.coords.longitude.toFixed(6);
+      document.getElementById('adminGeofenceLat').value = lat;
+      document.getElementById('adminGeofenceLng').value = lng;
+      showAlert(`📍 Captured current GPS: Lat ${lat}, Lng ${lng} (±${Math.round(pos.coords.accuracy)}m)`, 'success');
+    },
+    (err) => {
+      showAlert(`Failed to capture GPS: ${err.message}`, 'error');
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
 }
 
 function renderBranchIpList() {
